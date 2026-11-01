@@ -1,4 +1,5 @@
 const { SlashCommandBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder } = require("discord.js");
+const { buildConnectMessage } = require("../lib/serverInfo");
 
 module.exports = {
     data: new SlashCommandBuilder()
@@ -155,18 +156,14 @@ module.exports = {
 
                 if (currentRow.components.length > 0) rows.push(currentRow);
 
-                // If no picks left, show Join CS2 Server link and/or a "Move Players" button for admin
-                const cfg = require("../config.json");
+                // If no picks left, show the server connect info and a "Move Players" button for admin
+                const embeds = [embed];
                 if (available.length === 0) {
-                    // Join CS2 Link (if present in config)
-                    if (cfg.cs2ConnectUrl) {
-                        const joinRow = new ActionRowBuilder().addComponents(
-                            new ButtonBuilder()
-                                .setStyle(ButtonStyle.Link)
-                                .setLabel("Join CS2 Server")
-                                .setURL(cfg.cs2ConnectUrl)
-                        );
-                        rows.push(joinRow);
+                    // Join CS2 info (if a server is configured)
+                    const connect = buildConnectMessage();
+                    if (connect) {
+                        embeds.push(connect.embed);
+                        if (connect.row) rows.push(connect.row);
                     }
 
                     // Add a control row so admin can manually move players (optional)
@@ -181,9 +178,9 @@ module.exports = {
 
                 // If rows is empty (no buttons at all), send just the embed; otherwise send embed + components
                 if (rows.length === 0) {
-                    await interaction.channel.send({ embeds: [embed] });
+                    await interaction.channel.send({ embeds });
                 } else {
-                    await interaction.channel.send({ embeds: [embed], components: rows });
+                    await interaction.channel.send({ embeds, components: rows });
                 }
             },
 

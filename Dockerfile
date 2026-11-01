@@ -9,4 +9,6 @@ RUN npm ci --omit=dev
 # Copy the bot code
 COPY . .
 
-CMD ["node", "bot.js"]
+# Register slash commands on every start, then run the bot
+# (exec so the bot gets stop signals from Docker directly)
+CMD ["sh", "-c", "node deploy-commands.js; exec node bot.js"]
