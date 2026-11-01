@@ -59,14 +59,6 @@
         text-decoration: none;
     }
     .button:hover { filter: brightness(1.1); }
-    .buttons { display: flex; flex-direction: column; align-items: center; gap: 12px; }
-    .button.secondary {
-        padding: 12px 28px;
-        font-size: 1rem;
-        background: transparent;
-        color: var(--accent);
-        box-shadow: inset 0 0 0 2px var(--accent);
-    }
     .fallback { margin-top: 24px; text-align: left; font-size: 0.9rem; }
     .fallback p { margin-bottom: 8px; }
     code {
@@ -88,12 +80,9 @@
     <div id="ok" hidden>
         <h1>Opening CS2…</h1>
         <p>If your browser asks, choose <strong>Open Steam</strong>. If Steam asks about launch options, allow them.</p>
-        <div class="buttons">
-            <a id="steam-link" class="button" href="#">Join server</a>
-            <a id="connect-link" class="button secondary" href="#">Join (CS2 open or closed)</a>
-        </div>
+        <a id="steam-link" class="button" href="#">Try again</a>
         <div class="fallback">
-            <p>Neither button working? Open the CS2 console (<strong>~</strong>) and paste:</p>
+            <p>Not working? Open the CS2 console (<strong>~</strong>) and paste:</p>
             <code id="console-command"></code>
         </div>
     </div>
@@ -103,27 +92,29 @@
     </div>
 </main>
 <script>
-    // Link format: connect.html#ip=1.2.3.4:27015&pw=secret
+    // Link format: connect.html#ip=1.2.3.4:27015&pw=secret&mode=open|closed
     // The details live in the #fragment so they're never sent to the web server.
     const params = new URLSearchParams(location.hash.slice(1));
     const address = params.get("ip") || "";
     const password = params.get("pw") || "";
+    const mode = params.get("mode") === "open" ? "open" : "closed";
 
     // Only allow host:port, so the page can't be used to open anything else
     if (/^[A-Za-z0-9.-]+:\d{1,5}$/.test(address)) {
-        // steam://connect fails for CS2 ("AppID specified by server is invalid"),
-        // so launch CS2 (app 730) with +connect / +password launch options instead
-        const launchArgs = "+connect " + address + (password ? " +password " + password : "");
-        const steamUrl = "steam://run/730//" +
-            encodeURIComponent(launchArgs).replace(/%2B/g, "+").replace(/%3A/g, ":");
+        let steamUrl;
+        if (mode === "open") {
+            // steam://connect hands the server to a running CS2. It needs Steam to reach the
+            // server's status query, which fails from the server's own home network.
+            steamUrl = "steam://connect/" + address + (password ? "/" + encodeURIComponent(password) : "");
+        } else {
+            // Launch CS2 (app 730) with +connect / +password launch options
+            const launchArgs = "+connect " + address + (password ? " +password " + password : "");
+            steamUrl = "steam://run/730//" +
+                encodeURIComponent(launchArgs).replace(/%2B/g, "+").replace(/%3A/g, ":");
+        }
         const command = "connect " + address + (password ? "; password " + password : "");
 
-        // steam://connect hands the server to CS2 even if it's already running. It needs Steam to
-        // reach the server's status query, which fails from the server's own home network.
-        const connectUrl = "steam://connect/" + address + (password ? "/" + encodeURIComponent(password) : "");
-
         document.getElementById("steam-link").href = steamUrl;
-        document.getElementById("connect-link").href = connectUrl;
         document.getElementById("console-command").textContent = command;
         document.getElementById("ok").hidden = false;
 
