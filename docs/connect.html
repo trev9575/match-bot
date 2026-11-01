@@ -59,6 +59,14 @@
         text-decoration: none;
     }
     .button:hover { filter: brightness(1.1); }
+    .buttons { display: flex; flex-direction: column; align-items: center; gap: 12px; }
+    .button.secondary {
+        padding: 12px 28px;
+        font-size: 1rem;
+        background: transparent;
+        color: var(--accent);
+        box-shadow: inset 0 0 0 2px var(--accent);
+    }
     .fallback { margin-top: 24px; text-align: left; font-size: 0.9rem; }
     .fallback p { margin-bottom: 8px; }
     code {
@@ -80,9 +88,12 @@
     <div id="ok" hidden>
         <h1>Opening CS2…</h1>
         <p>If your browser asks, choose <strong>Open Steam</strong>. If Steam asks about launch options, allow them.</p>
-        <a id="steam-link" class="button" href="#">Join server</a>
+        <div class="buttons">
+            <a id="steam-link" class="button" href="#">Join server</a>
+            <a id="connect-link" class="button secondary" href="#">Join (CS2 open or closed)</a>
+        </div>
         <div class="fallback">
-            <p>CS2 already open, or not working? Open the CS2 console (<strong>~</strong>) and paste:</p>
+            <p>Neither button working? Open the CS2 console (<strong>~</strong>) and paste:</p>
             <code id="console-command"></code>
         </div>
     </div>
@@ -107,7 +118,12 @@
             encodeURIComponent(launchArgs).replace(/%2B/g, "+").replace(/%3A/g, ":");
         const command = "connect " + address + (password ? "; password " + password : "");
 
+        // steam://connect hands the server to CS2 even if it's already running. It needs Steam to
+        // reach the server's status query, which fails from the server's own home network.
+        const connectUrl = "steam://connect/" + address + (password ? "/" + encodeURIComponent(password) : "");
+
         document.getElementById("steam-link").href = steamUrl;
+        document.getElementById("connect-link").href = connectUrl;
         document.getElementById("console-command").textContent = command;
         document.getElementById("ok").hidden = false;
 
