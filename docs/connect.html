@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Join CS2 Server</title>
+<style>
+    :root {
+        --bg: #f4f5f7;
+        --card: #ffffff;
+        --text: #1d2026;
+        --muted: #5c6370;
+        --accent: #2f7d4f;
+        --accent-text: #ffffff;
+        --code-bg: #eceef1;
+        --error: #b3261e;
+    }
+    @media (prefers-color-scheme: dark) {
+        :root {
+            --bg: #15171b;
+            --card: #1f2228;
+            --text: #e8eaed;
+            --muted: #9aa0a9;
+            --accent: #3fa36a;
+            --code-bg: #2a2e35;
+            --error: #f28b82;
+        }
+    }
+    * { box-sizing: border-box; }
+    body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        padding: 16px;
+        background: var(--bg);
+        color: var(--text);
+        font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+    }
+    main {
+        width: 100%;
+        max-width: 440px;
+        background: var(--card);
+        border-radius: 12px;
+        padding: 28px 24px;
+        text-align: center;
+    }
+    h1 { margin: 0 0 8px; font-size: 1.4rem; }
+    p { margin: 0 0 20px; color: var(--muted); }
+    .button {
+        display: inline-block;
+        padding: 12px 24px;
+        border-radius: 8px;
+        background: var(--accent);
+        color: var(--accent-text);
+        font-weight: 600;
+        text-decoration: none;
+    }
+    .fallback { margin-top: 24px; text-align: left; font-size: 0.9rem; }
+    .fallback p { margin-bottom: 8px; }
+    code {
+        display: block;
+        padding: 10px 12px;
+        border-radius: 6px;
+        background: var(--code-bg);
+        color: var(--text);
+        font-family: ui-monospace, Consolas, monospace;
+        overflow-wrap: anywhere;
+        user-select: all;
+    }
+    .error { color: var(--error); }
+    [hidden] { display: none; }
+</style>
+</head>
+<body>
+<main>
+    <div id="ok" hidden>
+        <h1>Opening CS2…</h1>
+        <p>If your browser asks, choose <strong>Open Steam</strong>.</p>
+        <a id="steam-link" class="button" href="#">Join server</a>
+        <div class="fallback">
+            <p>Not working? Open the CS2 console (<strong>~</strong>) and paste:</p>
+            <code id="console-command"></code>
+        </div>
+    </div>
+    <div id="bad" hidden>
+        <h1>Invalid link</h1>
+        <p class="error">This join link is missing the server address. Use the button from Discord again.</p>
+    </div>
+</main>
+<script>
+    // Link format: connect.html#ip=1.2.3.4:27015&pw=secret
+    // The details live in the #fragment so they're never sent to the web server.
+    const params = new URLSearchParams(location.hash.slice(1));
+    const address = params.get("ip") || "";
+    const password = params.get("pw") || "";
+
+    // Only allow host:port, so the page can't be used to open anything else
+    if (/^[A-Za-z0-9.-]+:\d{1,5}$/.test(address)) {
+        const steamUrl = "steam://connect/" + address + (password ? "/" + encodeURIComponent(password) : "");
+        const command = "connect " + address + (password ? "; password " + password : "");
+
+        document.getElementById("steam-link").href = steamUrl;
+        document.getElementById("console-command").textContent = command;
+        document.getElementById("ok").hidden = false;
+
+        location.href = steamUrl;
+    } else {
+        document.getElementById("bad").hidden = false;
+    }
+</script>
+</body>
+</html>
