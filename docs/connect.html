@@ -50,13 +50,15 @@
     p { margin: 0 0 20px; color: var(--muted); }
     .button {
         display: inline-block;
-        padding: 12px 24px;
-        border-radius: 8px;
+        padding: 16px 40px;
+        border-radius: 10px;
         background: var(--accent);
         color: var(--accent-text);
-        font-weight: 600;
+        font-size: 1.15rem;
+        font-weight: 700;
         text-decoration: none;
     }
+    .button:hover { filter: brightness(1.1); }
     .fallback { margin-top: 24px; text-align: left; font-size: 0.9rem; }
     .fallback p { margin-bottom: 8px; }
     code {
@@ -77,10 +79,10 @@
 <main>
     <div id="ok" hidden>
         <h1>Opening CS2…</h1>
-        <p>If your browser asks, choose <strong>Open Steam</strong>.</p>
+        <p>If your browser asks, choose <strong>Open Steam</strong>. If Steam asks about launch options, allow them.</p>
         <a id="steam-link" class="button" href="#">Join server</a>
         <div class="fallback">
-            <p>Not working? Open the CS2 console (<strong>~</strong>) and paste:</p>
+            <p>CS2 already open, or not working? Open the CS2 console (<strong>~</strong>) and paste:</p>
             <code id="console-command"></code>
         </div>
     </div>
@@ -98,7 +100,11 @@
 
     // Only allow host:port, so the page can't be used to open anything else
     if (/^[A-Za-z0-9.-]+:\d{1,5}$/.test(address)) {
-        const steamUrl = "steam://connect/" + address + (password ? "/" + encodeURIComponent(password) : "");
+        // steam://connect fails for CS2 ("AppID specified by server is invalid"),
+        // so launch CS2 (app 730) with +connect / +password launch options instead
+        const launchArgs = "+connect " + address + (password ? " +password " + password : "");
+        const steamUrl = "steam://run/730//" +
+            encodeURIComponent(launchArgs).replace(/%2B/g, "+").replace(/%3A/g, ":");
         const command = "connect " + address + (password ? "; password " + password : "");
 
         document.getElementById("steam-link").href = steamUrl;
