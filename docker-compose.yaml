@@ -1,0 +1,7 @@
+services:
+  matchbot:
+    build: .
+    image: match-bot
+    container_name: matchbot
+    restart: unless-stopped
+    env_file: .env
