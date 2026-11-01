@@ -99,6 +99,14 @@
     const password = params.get("pw") || "";
     const mode = params.get("mode") === "open" ? "open" : "closed";
 
+    // Browsers only let a page close a tab it opened itself, so if close() is ignored, say so instead
+    function closeTab() {
+        window.close();
+        setTimeout(() => {
+            document.querySelector("#ok h1").textContent = "You can close this tab";
+        }, 300);
+    }
+
     // Only allow host:port, so the page can't be used to open anything else
     if (/^[A-Za-z0-9.-]+:\d{1,5}$/.test(address)) {
         let steamUrl;
@@ -119,6 +127,16 @@
         document.getElementById("ok").hidden = false;
 
         location.href = steamUrl;
+
+        // Close the tab once focus moves to Steam/CS2. The page can't see whether the connect
+        // worked, so leaving the browser is the signal. Coming back cancels it, so a tab
+        // behind the "Open Steam?" prompt stays open if the prompt is cancelled.
+        let closeTimer = null;
+        window.addEventListener("blur", () => {
+            clearTimeout(closeTimer);
+            closeTimer = setTimeout(closeTab, 5000);
+        });
+        window.addEventListener("focus", () => clearTimeout(closeTimer));
     } else {
         document.getElementById("bad").hidden = false;
     }
