@@ -8,7 +8,7 @@ module.exports = {
     data: new SlashCommandBuilder()
         .setName("leaderboard")
         .setDescription("CS2 5v5 leaderboard: scroll through everyone, with a link to the full site")
-        .addStringOption((o) => o.setName("stat").setDescription("What to rank by (default: Rating 3.0)")
+        .addStringOption((o) => o.setName("stat").setDescription("What to rank by (default: Elo / rank)")
             .addChoices(...Object.entries(STATS).map(([value, [name]]) => ({ name, value }))))
         .addStringOption((o) => o.setName("period").setDescription("Time window")
             .addChoices(...Object.entries(PERIODS).map(([value, name]) => ({ name, value }))))
@@ -23,7 +23,7 @@ module.exports = {
     },
 
     async execute(interaction) {
-        const stat = interaction.options.getString("stat") || "rating";
+        const stat = interaction.options.getString("stat") || "elo";
         const period = interaction.options.getString("period") || "all";
         const min = interaction.options.getInteger("min_matches") ?? DEFAULT_MIN;
         await interaction.deferReply();

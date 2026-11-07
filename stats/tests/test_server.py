@@ -75,7 +75,8 @@ def test_elo_fields_and_balancing_lookup(tmp_path, monkeypatch):
     fake_match(svc.db, announce=False)
     lb = call(base + "/api/leaderboard")[1]["players"]
     p0 = next(p for p in lb if p["steamid"] == SIDS[0])
-    assert p0["elo"] > 1500 and p0["rank"] == 0 and "Unranked" in p0["rank_name"]   # 1 of 5 placements
+    assert p0["elo"] is None and p0["elo_sort"] > 1500                  # hidden during placement, still sortable
+    assert p0["rank"] == 0 and "Unranked" in p0["rank_name"]           # 1 of 5 placements
     assert "rating2" not in p0
     m = call(base + "/api/matches/1")[1]
     assert all("elo_delta" in p for p in m["players"])
@@ -120,3 +121,13 @@ def test_join_check_home_network(tmp_path, monkeypatch):
     assert via_cloudflare("75.117.140.191") is True          # same public IP as the game server
     assert via_cloudflare("8.8.8.8") is False        # someone elsewhere
     assert call(base + "/api/join-check?host=bad;host")[0] == 400
+
+
+def test_match_without_rating3_data_still_loads(tmp_path, monkeypatch):
+    svc, base = start(tmp_path, monkeypatch)
+    mid = fake_match(svc.db, announce=False)
+    with svc.db.conn() as c:                      # simulate an old log import: no Rating 3.0 inputs
+        c.execute("UPDATE player_match SET e_kills=0, e_deaths=0, swing=0 WHERE match_id=?", (mid,))
+    code, m = call(base + f"/api/matches/{mid}")
+    assert code == 200 and all(p["rating"] is None for p in m["players"]) and m["highlights"][0]["key"] == "mvp"
+    assert call(base + f"/api/players/{SIDS[0]}")[0] == 200

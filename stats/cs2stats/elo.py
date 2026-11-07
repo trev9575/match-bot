@@ -34,6 +34,20 @@ def env_int(name, default):
 
 
 PLACEMENT_MATCHES = env_int("PLACEMENT_MATCHES", 5)   # CS:GO needed 10 wins; ours is matches
+
+# Win contribution: how much a player's own Rating 3.0 in a match scales their Elo change.
+# multiplier = 1 + weight * (rating - 1) on a win, 1 - weight * (rating - 1) on a loss, capped to
+# 1 +/- MAX_ADJUST. Default: a 1.50 game in a win earns 20% more, a 0.50 game in a loss costs 20%
+# more; never more than 30% either way. CONTRIBUTION_WEIGHT=0 turns it off (pure CS:GO style).
+CONTRIBUTION_WEIGHT = float(os.environ.get("CONTRIBUTION_WEIGHT", "0.4").split("#")[0].strip() or 0)
+MAX_ADJUST = 0.30
+
+
+def contribution(rating, score) -> float:
+    if rating is None or not CONTRIBUTION_WEIGHT or score == 0.5:
+        return 1.0
+    f = 1 + CONTRIBUTION_WEIGHT * (rating - 1) * (1 if score == 1 else -1)
+    return max(1 - MAX_ADJUST, min(1 + MAX_ADJUST, f))
 RANK_EXPIRE_DAYS = env_int("RANK_EXPIRE_DAYS", 30)    # CS:GO hid your rank after ~a month idle; 0 = never
 
 # (name, short, color, minimum Elo). Colors are our own tier colors.
@@ -165,7 +179,10 @@ def compute(rows: list[dict], now: str | None = None):
             for p in ps:
                 s = state[p["steamid"]]
                 score = {"W": 1.0, "L": 0.0}.get(p["result"], 0.5)
-                updates[p["steamid"]] = glicko2_update(s["elo"], s["rd"], s["vol"], [(opp_r, opp_rd, score)])
+                r, rd, vol = glicko2_update(s["elo"], s["rd"], s["vol"], [(opp_r, opp_rd, score)])
+                # scale the rating change (not the uncertainty) by this player's contribution
+                r = s["elo"] + (r - s["elo"]) * contribution(p.get("rating"), score)
+                updates[p["steamid"]] = (r, rd, vol)
         for sid, (r, rd, vol) in updates.items():
             s = state[sid]
             per_match[(mid, sid)] = {"elo_before": round(s["elo"]), "elo_after": round(r),
