@@ -12,6 +12,12 @@ Public (read-only) endpoints — used by the website:
   GET  /api/matches/<id>
   GET  /api/ranks                          rank bands + which custom badge images exist
   GET  /api/join-check?host=<cs2 host>     {"home": true} if the visitor is on the server's own network
+  GET  /api/seasons                         every season with its final (or live) Elo standings
+  GET  /api/achievements                    achievement catalog with how many players have each
+  GET  /api/superlatives?season=N           duos, rivalries
+  GET  /api/recap?days=7                    the last week (or since=&until=)
+  GET  /api/maps                            maps we've played (for map votes)
+  GET  /ach/<id>.svg|png                    achievement badges
 
 Bot-only endpoints — need "Authorization: Bearer $STATS_API_KEY":
   GET  /api/announcements                 matches waiting to be posted to Discord
@@ -22,6 +28,8 @@ Bot-only endpoints — need "Authorization: Bearer $STATS_API_KEY":
   POST /api/unlink   {"discord_id"}
   POST /api/rescan
   POST /api/discord-ratings {"discord_ids": [...]}  -> Elo for linked members (team balancing)
+  POST /api/predict  {"team_a": [discord ids], "team_b": [...]}  -> win odds + Elo at stake
+  GET/POST /api/kv/<key>  {"value": "..."}  small store for the bot (recap / season posts)
   DELETE /api/matches/<id>
 """
 from __future__ import annotations
@@ -42,7 +50,9 @@ from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
+from . import community
 from . import elo as elo_mod
+from . import icons
 from .db import DB
 from .ingest import DemoWatcher
 from .leaderboard import with_categories
@@ -164,17 +174,41 @@ class StatsService:
             min_rounds=env_int("MIN_ROUNDS", 10), min_team_size=env_int("MIN_TEAM_SIZE", 4))
         self.loop = asyncio.new_event_loop()
         self.rank_dir = os.environ.get("RANK_IMAGE_DIR", os.path.join(os.path.dirname(self.db_path) or ".", "ranks"))
-        self._elo = (None, {}, {})
+        self._elo = (None, None)
         self._elo_lock = threading.Lock()
+        self._comm = (None, None)
 
     # ---- Elo: replayed from the match history, cached until matches change ----
-    def elo(self):
-        v = self.db.version()
+    def elo_full(self):
+        v = (self.db.version(), datetime.now().strftime("%Y-%m-%d %H"))   # hourly: idle RD / season roll
         with self._elo_lock:
             if self._elo[0] != v:
-                players, per_match = elo_mod.compute(self.db.elo_rows())
-                self._elo = (v, players, per_match)
-            return self._elo[1], self._elo[2]
+                self._elo = (v, elo_mod.compute_full(self.db.elo_rows()))
+            return self._elo[1]
+
+    def elo(self):
+        full = self.elo_full()
+        return full["players"], full["per_match"]
+
+    def comm(self):
+        """Rows, kill pairs, names and achievements; cached until matches change."""
+        full = self.elo_full()
+        with self._elo_lock:
+            if self._comm[0] is not full:
+                rows = self.db.all_rows()
+                data = {"rows": rows, "pairs": self.db.kill_pairs(), "names": self.db.names()}
+                data["ach"] = community.achievements(rows, full)
+                data["player_count"] = len({r["steamid"] for r in rows})
+                self._comm = (full, data)
+            return self._comm[1]
+
+    def season_param(self, value):
+        """'current', a number, or None -> season number or None."""
+        if value in (None, "", "all"):
+            return None
+        if value == "current":
+            return elo_mod.season_of(datetime.now().isoformat(timespec="seconds"))
+        return int(value)
 
     def _with_elo(self, rows, match_id=None):
         """Add rank + Elo. Until a player finishes placement their Elo is hidden (None), the way
@@ -190,8 +224,11 @@ class StatsService:
             r.update(info)
             mid = match_id or r.get("match_id")
             if mid is not None:
+                # per-match Elo changes show once lifetime placement is done (a season re-placement
+                # hides the current rank, not old results)
                 pm = per_match.get((mid, r["steamid"]), {})
-                r.update(pm if placed else {k: None for k in pm})
+                done = info.get("elo_matches", 0) >= elo_mod.PLACEMENT_MATCHES
+                r.update(pm if done else {k: None for k in pm})
         return rows
 
     async def _on_new(self, match_id):
@@ -220,8 +257,26 @@ class StatsService:
         return asyncio.run_coroutine_threadsafe(go(), self.loop).result(timeout=600)
 
     # ---- read models ----
-    def leaderboard(self, period=None, map_name=None):
-        rows = self._with_elo(with_categories(self.db.aggregates(since=_since(period), map_name=map_name)))
+    def leaderboard(self, period=None, map_name=None, season=None):
+        if season:
+            start, end = elo_mod.season_bounds(season)
+            rows = with_categories(self.db.aggregates(since=start, until=end, map_name=map_name))
+            info = elo_mod.season_info(season)
+            if info["finished"]:
+                # a finished season is ranked by where everyone ended it
+                final = self.elo_full()["season_final"].get(season, {})
+                for r in rows:
+                    f = final.get(r["steamid"], {})
+                    placed = f.get("placed", False)
+                    r.update({k: f.get(k) for k in ("rank", "rank_name", "rank_short", "rank_color")})
+                    r.update(placed=placed, elo_sort=f.get("elo"), elo=f.get("elo") if placed else None)
+                rows.sort(key=lambda r: (not r.get("placed"), -(r.get("elo_sort") or 0)))
+                for i, r in enumerate(rows, 1):
+                    r["position"] = i
+                return rows
+            rows = self._with_elo(rows)
+        else:
+            rows = self._with_elo(with_categories(self.db.aggregates(since=_since(period), map_name=map_name)))
         # ranked by Elo: placed players first, then players still in placement (by their hidden Elo)
         rows.sort(key=lambda r: (not r.get("placed"), -(r.get("elo_sort") or 0)))
         for i, r in enumerate(rows, 1):
@@ -265,14 +320,112 @@ class StatsService:
                 by_map.append({"map": m, **{k: r[k] for k in (
                     "matches", "wins", "losses", "rating", "kd", "adr", "kast", "kills", "deaths")}})
         info = self.db.player(steamid) or {}
+        c = self.comm()
+        full = self.elo_full()
+        odds = full["match_odds"]
+        for h in history:
+            if h["match_id"] in odds:
+                h["win_prob"] = odds[h["match_id"]] if h["team"] == "A" else 1 - odds[h["match_id"]]
+        seasons = []
+        for n, st in community.season_standings(full).items():
+            snap = full["season_final"].get(n, {}).get(steamid)
+            if snap:
+                pos = next((i for i, p in enumerate(st["players"], 1) if p["steamid"] == steamid), None)
+                seasons.append({**{k: st[k] for k in ("season", "name", "start", "end", "finished", "current")},
+                                "matches": snap["season_matches"], "position": pos,
+                                **({k: snap[k] for k in ("elo", "rank", "rank_name", "rank_short", "rank_color")}
+                                   if snap["placed"] else {"elo": None, "rank": 0, "rank_name": "Unranked"})})
         return {"player": agg, "history": history, "maps": by_map,
-                "linked": bool(info.get("discord_id")), "group_size": len(rows)}
+                "linked": bool(info.get("discord_id")), "group_size": len(rows),
+                "achievements": community.player_achievements(c["ach"], steamid, c["player_count"]),
+                "head_to_head": community.head_to_head(steamid, c["rows"], c["pairs"], c["names"]),
+                "openings": community.openings(steamid, c["rows"]),
+                "seasons": seasons}
 
     def match(self, match_id):
         m, ps = self.db.match(match_id)
         if not m:
             return None
-        return {"match": m, "players": self._with_elo(ps, match_id=m["id"]), "highlights": highlights(ps)}
+        full = self.elo_full()
+        p_a = full["match_odds"].get(m["id"])
+        odds = None
+        if p_a is not None:
+            winner = "A" if (m["score_a"] or 0) > (m["score_b"] or 0) else "B" if (m["score_b"] or 0) > (m["score_a"] or 0) else None
+            odds = {"win_prob_a": p_a, "win_prob_b": 1 - p_a,
+                    "upset": bool(winner) and (p_a if winner == "A" else 1 - p_a) < 0.4}
+        c = self.comm()
+        names = c["names"]
+        unlocks = [{**community.ACH[aid], "steamid": sid, "player": names.get(sid, sid)}
+                   for sid, aid in c["ach"]["match_unlocks"].get(m["id"], [])]
+        return {"match": m, "players": self._with_elo(ps, match_id=m["id"]), "highlights": highlights(ps),
+                "odds": odds, "achievements": unlocks}
+
+    # ---- community ----
+    def seasons(self):
+        full = self.elo_full()
+        st = community.season_standings(full)
+        cur = full["season"]
+        if cur not in st:
+            st[cur] = {**elo_mod.season_info(cur), "players": []}
+        names = self.db.names()
+        players = full["players"]
+        out = []
+        for n in sorted(st, reverse=True):
+            s = st[n]
+            if s["current"]:
+                # live standings: current, placed players who have played this season
+                ranked = [{"steamid": sid, **p} for sid, p in players.items()
+                          if p["placed"] and not p["inactive"] and p.get("season_matches")]
+                ranked.sort(key=lambda p: -p["elo"])
+                s = {**s, "players": ranked}
+            out.append({**{k: s[k] for k in ("season", "name", "start", "end", "finished", "current")},
+                        "players": [{"steamid": p["steamid"], "name": names.get(p["steamid"], p["steamid"]),
+                                     **{k: p.get(k) for k in ("elo", "rank", "rank_name", "rank_short",
+                                                              "rank_color", "season_matches")}}
+                                    for p in s["players"][:20]]})
+        return {"seasons": out, "current": cur, "season_months": elo_mod.SEASON_MONTHS,
+                "carry": elo_mod.SEASON_CARRY, "season_placement": elo_mod.SEASON_PLACEMENT}
+
+    def superlatives(self, season=None, period=None):
+        c = self.comm()
+        rows, pairs = c["rows"], c["pairs"]
+        since = until = None
+        if season:
+            since, until = elo_mod.season_bounds(season)
+        elif _since(period):
+            since = _since(period)
+        if since:
+            rows = [r for r in rows if r["played_at"] and r["played_at"] >= since and (not until or r["played_at"] < until)]
+            ids = {r["match_id"] for r in rows}
+            pairs = [p for p in pairs if p["match_id"] in ids]
+        return community.superlatives(rows, pairs, c["names"])
+
+    def recap(self, since=None, until=None, days=7):
+        now = datetime.now()
+        until = until or now.isoformat(timespec="seconds")
+        since = since or (datetime.fromisoformat(until) - timedelta(days=days)).isoformat(timespec="seconds")
+        c = self.comm()
+        return community.recap(c["rows"], c["pairs"], self.elo_full(), c["ach"], c["names"], since, until)
+
+    def predict(self, team_a, team_b):
+        """Teams as Discord ids (or SteamIDs). Unlinked members count as brand-new players."""
+        links = {d: s for s, d in self.db.discord_links().items()}
+        names = self.db.names()
+
+        def sid(x):
+            x = str(x)
+            return x if STEAMID.match(x) else links.get(x, f"unlinked:{x}")
+        a, b = [sid(x) for x in team_a], [sid(x) for x in team_b]
+        pr = elo_mod.predict(self.elo_full(), a, b)
+        back = {sid(x): str(x) for x in list(team_a) + list(team_b)}
+        players = []
+        for s, p in pr["players"].items():
+            players.append({"id": back.get(s, s), "steamid": None if s.startswith("unlinked:") else s,
+                            "name": names.get(s), "linked": not s.startswith("unlinked:"),
+                            **{k: p.get(k) for k in ("team", "rank", "rank_short", "rank_name", "placed",
+                                                     "elo_win", "elo_loss", "elo_matches")},
+                            "elo": p["elo"] if p.get("placed") else None})
+        return {"win_prob_a": pr["win_prob_a"], "win_prob_b": pr["win_prob_b"], "players": players}
 
     def rank_images(self):
         """Custom badge images the server owner dropped in RANK_IMAGE_DIR (1.png ... 18.png)."""
@@ -368,7 +521,9 @@ class Handler(BaseHTTPRequestHandler):
             if route == ["summary"]:
                 return self._json(svc.summary())
             if route == ["leaderboard"]:
-                return self._json({"players": svc.leaderboard(q.get("period"), q.get("map") or None),
+                season = svc.season_param(q.get("season"))
+                return self._json({"players": svc.leaderboard(q.get("period"), q.get("map") or None, season),
+                                   "season": elo_mod.season_info(season) if season else None,
                                    "min_matches": svc.min_matches})
             if route == ["ranks"]:
                 return self._json({"ranks": elo_mod.ranks_table(), "images": svc.rank_images(),
@@ -386,6 +541,17 @@ class Handler(BaseHTTPRequestHandler):
                     return self._json({"home": False})
                 home = ip.is_private or ip.is_loopback or str(ip) in resolve(host)
                 return self._json({"home": home})
+            if route == ["seasons"]:
+                return self._json(svc.seasons())
+            if route == ["achievements"]:
+                c = svc.comm()
+                return self._json({"achievements": community.achievement_catalog(c["ach"], c["player_count"])})
+            if route == ["superlatives"]:
+                return self._json(svc.superlatives(svc.season_param(q.get("season")), q.get("period")))
+            if route == ["recap"]:
+                return self._json(svc.recap(q.get("since"), q.get("until"), int(q.get("days", 7))))
+            if route == ["maps"]:
+                return self._json({"maps": svc.db.maps_played()})
             if route == ["players"]:
                 return self._json(svc.db.player_names(q.get("q", ""), limit=25))
             if len(route) == 2 and route[0] == "players":
@@ -403,7 +569,7 @@ class Handler(BaseHTTPRequestHandler):
                 data = svc.match(mid)
                 return self._json(data) if data else self._err(404, "no such match")
             # ---- bot-only ----
-            if route[:1] in (["announcements"], ["discord"], ["links"]) and not self._authed():
+            if route[:1] in (["announcements"], ["discord"], ["links"], ["kv"]) and not self._authed():
                 return self._err(401, "missing or wrong STATS_API_KEY")
             if route == ["announcements"]:
                 links = svc.db.discord_links()
@@ -417,6 +583,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"matches": out})
             if route == ["links"]:
                 return self._json({"players": svc.db.players_with_links()})
+            if len(route) == 2 and route[0] == "kv":
+                return self._json({"key": route[1], "value": svc.db.kv_get(route[1])})
             if len(route) == 2 and route[0] == "discord":
                 return self._json({"steamid": svc.db.steamid_for_discord(route[1])})
             return self._err(404, "not found")
@@ -457,6 +625,14 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"ok": True})
             if route == ["rescan"]:
                 return self._json({"ok": True, "new": svc.rescan()})
+            if route == ["predict"]:
+                b = self._body() or {}
+                return self._json(svc.predict(list(b.get("team_a") or [])[:20], list(b.get("team_b") or [])[:20]))
+            if len(route) == 2 and route[0] == "kv":
+                b = self._body() or {}
+                v = b.get("value")
+                svc.db.kv_set(route[1][:64], None if v is None else str(v)[:4000])
+                return self._json({"ok": True})
             if route == ["discord-ratings"]:
                 b = self._body() or {}
                 return self._json({"players": svc.discord_ratings(list(b.get("discord_ids") or [])[:40])})
@@ -479,6 +655,12 @@ class Handler(BaseHTTPRequestHandler):
 
     # ---- website (one page; /player/<id> and /match/<id> are client-side routes) ----
     def _static(self, path):
+        a = re.fullmatch(r"/ach/([a-z0-9]+)\.svg", path)
+        if a:
+            body = icons.svg(a.group(1), int(parse_qs(urlparse(self.path).query).get("s", ["64"])[0][:3] or 64),
+                             locked="locked" in self.path)
+            return self._send(200, body.encode(), "image/svg+xml", cache="public, max-age=86400") if body \
+                else self._err(404, "no such achievement")
         m = re.fullmatch(r"/ranks/(\d{1,2}\.(?:png|webp|svg|jpg))", path)
         if m:
             file = os.path.join(self.svc.rank_dir, m.group(1))

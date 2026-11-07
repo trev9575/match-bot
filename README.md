@@ -11,7 +11,7 @@ and Leetify-style stats with a leaderboard website.
 | `stats` (Python, `stats/`) | No Discord login. Watches MatchZy's demo folder (read-only), parses each finished demo, stores stats in SQLite (`stats-data/stats.db`), and serves the leaderboard website + a small API on port 8080. |
 
 ```
-MatchZy demo (.dem) ─► stats: parse ─► SQLite ─► website (/, /player/<steamid>, /match/<id>)
+MatchZy demo (.dem) ─► stats: parse ─► SQLite ─► website (/, /player/<steamid>, /match/<id>, /community, /achievements, /seasons)
                                           └────► matchbot: /leaderboard, /stats, auto scorecards
 ```
 
@@ -22,7 +22,9 @@ Short version: fill in the stats section of `.env` (see `.env.example`), then `d
 
 | Command | |
 |---|---|
-| `/startmatch`, `/connect` | Lobby (starter can **Add Everyone in Voice** or **Choose Players**), captains, draft (or **Randomize Teams**: 2 random captains, Elo-balanced), move to voice; how to join the server |
+| `/startmatch`, `/connect` | Lobby (starter can **Add Everyone in Voice**, **Choose Players** or run an optional **Map Vote**), captains, draft (or **Randomize Teams**: 2 random captains, Elo-balanced), win prediction with each player's Elo at stake, move to voice, **Back to Lobby**; how to join the server |
+| `/matchnight when [players] [note]` | Signup with In / Maybe / Can't. Pings the In list when there's enough, reminds them 30 min before, opens a lobby with them at start time |
+| `/recap [days]` · `/status` | This week's highlights · is the server up, what map, who's on |
 | `/leaderboard [stat] [period] [min_matches]` | 10 players per page with Prev/Next, plus a button to the full site |
 | `/stats [player] [member]` | Profile: rating, category percentiles, duels, utility, recent matches |
 | `/match [id]` · `/matches` | Scorecard for a match · the last 10 matches |
@@ -46,10 +48,32 @@ Short version: fill in the stats section of `.env` (see `.env.example`), then `d
 - Only finished competitive maps count: warmup, knife rounds, retakes, wingman, DM, abandoned games and AFK players are filtered out.
 - Steam IDs are stored for every player; `/link` maps Discord users to them.
 
+## Community features
+
+- **Win prediction**: posted when teams are set (draft or Randomize): each team's chance from everyone's Elo,
+  and how much Elo each player can win or lose (a range, because Rating 3.0 scales it ±30%). Match pages and
+  scorecards show the pre-match odds and flag upsets.
+- **Achievements**: 40 badges (original artwork, `stats/cs2stats/icons.py`) computed from the match history:
+  feats like Ace or a 1v4 clutch, milestones, rank tiers, season podiums, and a small hall of shame.
+  New ones are posted with the scorecard; profiles show the full grid with rarity.
+- **Who killed who**: every demo records kills, headshots and opening duels between each pair of players.
+  Profiles get head-to-head and teammate tables, nemesis / favorite victim, and opening duels split by T/CT.
+  Demos read by an older version are re-read once in the background to fill this in.
+- **Duos & rivalries**: best/worst/most-played duo, biggest rivalry, most one-sided matchup (`/community`).
+- **Weekly recap**: posted every Monday at noon (`RECAP_DAY`, `RECAP_HOUR`), also `/recap`.
+- **Seasons**: every 3 months. Elo moves halfway back to 1500, ranks show again after 2 matches; the final
+  standings are posted, and the top 3 earn achievements. Season filter on the leaderboard.
+- **Live server status**: one message in `STATUS_CHANNEL_ID` kept up to date (map, players, Join button), plus
+  the bot's status line. Uses Steam's standard server query; nothing is sent to the server's console.
+- **Back to lobby**: when the scorecard posts, everyone in the team channels goes back to `LOBBY_VOICE_CHANNEL_ID`.
+- **Map vote** (optional): the match starter picks maps we've played and/or types any map name (typed maps
+  aren't saved); lobby players vote with buttons, the starter ends it.
+
 ## Development
 
 ```bash
 npm ci                                   # bot
+python stats/tools/render_icons.py       # after editing badge artwork: re-render the PNGs for Discord
 cd stats && pip install -r requirements.txt pytest && python -m pytest -q tests
 python -m cs2stats.server                # website on :8080 (reads ../.env if run from the repo root)
 python -m cs2stats.cli show-demo some.dem   # print one demo's stat table, no database

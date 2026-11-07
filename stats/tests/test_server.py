@@ -131,3 +131,23 @@ def test_match_without_rating3_data_still_loads(tmp_path, monkeypatch):
     code, m = call(base + f"/api/matches/{mid}")
     assert code == 200 and all(p["rating"] is None for p in m["players"]) and m["highlights"][0]["key"] == "mvp"
     assert call(base + f"/api/players/{SIDS[0]}")[0] == 200
+
+
+def test_community_endpoints(tmp_path, monkeypatch):
+    svc, base = start(tmp_path, monkeypatch)
+    mid = fake_match(svc.db, announce=True)
+    for path in ("/api/seasons", "/api/achievements", "/api/superlatives", "/api/recap?days=3650",
+                 "/api/maps", "/api/leaderboard?season=1", "/api/superlatives?season=current"):
+        code, body = call(base + path)
+        assert code == 200, path
+    code, m = call(base + f"/api/matches/{mid}")
+    assert any(a["id"] == "steamroll" for a in m["achievements"]) and m["odds"]["win_prob_a"] == 0.5
+    code, p = call(base + f"/api/players/{SIDS[0]}")
+    assert p["openings"]["attempts"] == 13 and p["head_to_head"]["opponents"]
+    code, pr = call(base + "/api/predict", "POST", {"team_a": [SIDS[0]], "team_b": ["123"]}, key="secret")
+    assert code == 200 and abs(pr["win_prob_a"] - 0.5) < 0.2 and len(pr["players"]) == 2
+    assert call(base + "/api/kv/recap", "POST", {"value": "2026-11-07"}, key="secret")[0] == 200
+    assert call(base + "/api/kv/recap", key="secret")[1]["value"] == "2026-11-07"
+    assert call(base + "/api/kv/recap")[0] == 401
+    with urllib.request.urlopen(base + "/ach/ace.svg") as r:
+        assert r.headers["Content-Type"] == "image/svg+xml" and b"<svg" in r.read()

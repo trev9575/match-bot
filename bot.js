@@ -2,6 +2,9 @@ const { Client, GatewayIntentBits, Collection } = require("discord.js");
 const fs = require("fs");
 const config = require("./config.json");
 const { startMatchFeed } = require("./lib/matchFeed");
+const { startServerStatus } = require("./lib/serverStatus");
+const { startSchedules } = require("./lib/schedules");
+const mapVote = require("./lib/mapVote");
 
 const client = new Client({
     intents: [
@@ -24,6 +27,8 @@ for (const file of commandFiles) {
 client.on("ready", () => {
     console.log(`Bot logged in as ${client.user.tag}`);
     startMatchFeed(client);   // posts CS2 scorecards when the stats service finishes a demo
+    startServerStatus(client); // live server status message + "Watching de_mirage 8/10"
+    startSchedules(client);    // weekly recap, season-end post, match night reminders
 });
 
 // Commands can own buttons by exporting buttonPrefix + handleButton (e.g. leaderboard paging)
@@ -63,6 +68,20 @@ client.on("interactionCreate", async (interaction) => {
             } catch (err) {
                 console.error(err);
             }
+        }
+        return;
+    }
+
+    // Map vote: the setup menu and the "type a map" form
+    if (interaction.isStringSelectMenu() || interaction.isModalSubmit()) {
+        const [action, matchId] = interaction.customId.split(":");
+        const match = client.matches.get(matchId);
+        if (!match) return interaction.reply({ content: "Match no longer exists.", ephemeral: true }).catch(() => {});
+        try {
+            await mapVote.handle(interaction, action, match);
+        } catch (err) {
+            console.error(err);
+            await replyError(interaction, err);
         }
         return;
     }
@@ -153,6 +172,19 @@ client.on("interactionCreate", async (interaction) => {
 
         if (action === "chooseplayers") {
             await match.choosePlayers(interaction);
+        }
+
+        if (action === "tolobby") {
+            await match.backToLobby(interaction);
+        }
+
+        if (action.startsWith("map")) {
+            try {
+                await mapVote.handle(interaction, action, match);
+            } catch (err) {
+                console.error(err);
+                await replyError(interaction, err);
+            }
         }
     }
 });

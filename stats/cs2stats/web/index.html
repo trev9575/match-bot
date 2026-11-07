@@ -116,6 +116,32 @@
   .empty { color: var(--muted); padding: 24px 0; text-align: center; }
   .err { color: var(--bad); }
   .pager { display: flex; justify-content: center; gap: 8px; margin-top: 10px; }
+  .nav { display: flex; gap: 4px; flex-wrap: wrap; align-items: center; }
+  .nav a { font-size: 13px; padding: 5px 10px; border-radius: 6px; color: var(--muted); }
+  .nav a[aria-current=page] { background: var(--panel-2); color: var(--fg); }
+  .nav a:hover { text-decoration: none; color: var(--fg); }
+  .navbar { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .navbar .home { font-family: var(--serif); font-size: 17px; }
+  .ach-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); gap: 10px; }
+  .ach { text-align: center; font-size: 11px; color: var(--muted); position: relative; }
+  .ach img { width: 56px; height: 56px; display: block; margin: 0 auto 4px; }
+  .ach b { display: block; color: var(--fg); font-size: 12px; font-weight: 600; line-height: 1.2; }
+  .ach.locked img { opacity: .5; }
+  .ach.locked b { color: var(--muted); font-weight: 500; }
+  .ach .cnt { position: absolute; top: 0; right: 8px; background: var(--fg); color: var(--bg); border-radius: 8px; font-size: 10px; font-weight: 700; padding: 0 5px; }
+  .ach-row { display: grid; grid-template-columns: 52px 1fr auto; gap: 12px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--line); }
+  .ach-row img { width: 48px; height: 48px; }
+  .ach-row .d { color: var(--muted); font-size: 12px; }
+  .odds { display: flex; height: 26px; border-radius: 6px; overflow: hidden; font-size: 12px; font-weight: 700; color: #111; }
+  .odds div { display: flex; align-items: center; padding: 0 10px; white-space: nowrap; }
+  .odds .a { background: var(--team-a); } .odds .b { background: var(--team-b); justify-content: flex-end; }
+  .sup { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 12px; }
+  .sup .card { padding: 14px; }
+  .sup .k { font-size: 12px; color: var(--muted); }
+  .sup .v { font-weight: 600; margin-top: 4px; }
+  .sup .s { font-size: 12px; color: var(--muted); margin-top: 2px; }
+  .upset { color: var(--gold); font-weight: 600; }
+  .split { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
   footer { color: var(--faint); font-size: 12px; text-align: center; }
   @media (max-width: 600px) { .brand { font-size: 22px; } .hero h1 { font-size: 26px; } .tile-num { font-size: 22px; } }
 </style>
@@ -181,6 +207,15 @@ const rankCell = (r) => (r.elo == null && r.elo_sort == null ? "–" :
   `<span class="rk">${badge(r)}<span class="elo ${r.elo != null && r.rank ? "" : "prov"}" title="${esc(r.rank_name || "")}">${eloText(r)}</span></span>`);
 const delta = (d) => (d == null ? "–" : `<span class="delta ${d > 0 ? "up" : d < 0 ? "down" : ""}">${d > 0 ? "+" : ""}${d}</span>`);
 
+const achImg = (a, size = 56) => `<img src="/ach/${esc(a.id)}.svg${a.unlocked === false ? "?locked=1" : ""}" width="${size}" height="${size}" alt="">`;
+const HL_ICON = {mvp: "mvp", entry: "door", clutch: "clutch3", ace: "ace", "5k": "ace", util: "nades", flash: "lightsout", teamflash: "friendlyfire"};
+const pctOrDash = (v) => (v == null ? "–" : pct(v));
+function nav(active) {
+  const items = [["/", "Leaderboard"], ["/community", "Community"], ["/achievements", "Achievements"], ["/seasons", "Seasons"]];
+  return `<div class="navbar"><a data-nav class="home" href="/">CS2 5v5</a><nav class="nav">${items.map(([h, l]) => `<a data-nav href="${h}" ${active === h ? 'aria-current="page"' : ""}>${l}</a>`).join("")}</nav></div>`;
+}
+const duoNames = (d) => d.players.map((p) => pLink(p.steamid, p.name)).join(" + ");
+
 // ---------------------------------------------------------------- sortable tables
 // cols: [{k, label, fmt(row) -> html, cls, left, sort(row) -> value, nosort, title}]
 function table(id, cols, rows, opts = {}) {
@@ -213,7 +248,7 @@ document.addEventListener("click", (e) => {
 table.onSort = {};
 
 // ---------------------------------------------------------------- leaderboard page
-const LB = {view: "overview", q: "", min2: false, period: "all", map: ""};
+const LB = {view: "overview", q: "", min2: false, period: "all", map: "", seasons: null};
 const NAME_COL = {k: "name", label: "Player", left: true, stick: true, fmt: (r) => `<span class="pname">${pLink(r.steamid, r.name)}</span>`, sort: (r) => r.name.toLowerCase()};
 const RANK_COL = {k: "elo", label: "Rank · Elo", left: true, fmt: rankCell, sort: (r) => (r.placed ? 100000 : 0) + num(r.elo_sort), title: "CS:GO-style rank: Elo from wins and losses, adjusted a little by how you played. Hidden until placement matches are done."};
 const POS_COL = {k: "position", label: "#", fmt: (r) => r.position, sort: (r) => -num(r.position)};
@@ -245,11 +280,14 @@ const VIEWS = {
 };
 
 async function pageHome() {
-  const [sum, lb, ms] = await Promise.all([api("summary"), api(`leaderboard?period=${LB.period}&map=${encodeURIComponent(LB.map)}`), api("matches?limit=15"), loadRanks()]);
+  const lbq = LB.period.startsWith("s") ? `season=${LB.period.slice(1)}` : `period=${LB.period}`;
+  const [sum, lb, ms, ss] = await Promise.all([api("summary"), api(`leaderboard?${lbq}&map=${encodeURIComponent(LB.map)}`), api("matches?limit=15"), LB.seasons || api("seasons"), loadRanks()]);
+  LB.seasons = ss;
   const players = lb.players, minM = lb.min_matches;
   document.title = "CS2 5v5 Leaderboard";
   const leader = sum.leader;
-  $app.innerHTML = `
+  const periods = [["all", "All time"], ...ss.seasons.map((x) => ["s" + x.season, x.name + (x.current ? " (now)" : "")]), ["30", "Last 30 days"], ["7", "Last 7 days"]];
+  $app.innerHTML = `${nav("/")}
     <div class="top"><div>
       <h1 class="brand">CS2 5v5 Leaderboard</h1>
       <p class="take">${sum.top_elo ? `<b>${esc(sum.top_elo.name)}</b> is #1: ${esc(sum.top_elo.rank_name)}, ${sum.top_elo.elo} Elo. ` : `Nobody has finished ${PLACEMENTS} placement matches yet. `}${leader ? `Best average rating: <b>${esc(leader.name)}</b> (${f2(leader.rating)}). ` : ""}Ratings are relative to this group: 1.00 is the average player in our games.</p>
@@ -263,11 +301,12 @@ async function pageHome() {
     </div>
     <section class="card">
       <h2>Leaderboard</h2>
+      ${lb.season ? `<p class="note"><b>${esc(lb.season.name)}</b>: ${fmtDate(lb.season.start)} – ${fmtDate(new Date(new Date(lb.season.end) - 1))}. ${lb.season.finished ? "Final standings: Elo and rank as each player ended the season." : "Stats from this season only; rank and Elo are live."}</p>` : ""}
       <p class="note">Ranked by Elo. Players still in their ${PLACEMENTS} placement matches show <b>?</b> and are listed after ranked players. Click a player for their profile, or a column to sort. Faded rows have fewer than ${minM} matches.</p>
       <div class="controls">
         <div class="tabs" role="tablist">${Object.entries(VIEWS).map(([k, v]) => `<button class="tab" role="tab" data-view="${k}" aria-selected="${LB.view === k}">${v.label}</button>`).join("")}</div>
         <input type="search" id="q" placeholder="Search players" value="${esc(LB.q)}" aria-label="Search players">
-        <select id="period" aria-label="Time period">${[["all", "All time"], ["30", "Last 30 days"], ["7", "Last 7 days"]].map(([v, l]) => `<option value="${v}" ${LB.period === v ? "selected" : ""}>${l}</option>`).join("")}</select>
+        <select id="period" aria-label="Time period">${periods.map(([v, l]) => `<option value="${v}" ${LB.period === v ? "selected" : ""}>${l}</option>`).join("")}</select>
         <select id="map" aria-label="Map"><option value="">All maps</option>${sum.maps.map((m) => `<option value="${esc(m)}" ${LB.map === m ? "selected" : ""}>${esc(mapName(m))}</option>`).join("")}</select>
         <label class="check"><input type="checkbox" id="min2" ${LB.min2 ? "checked" : ""}> ${minM}+ matches only</label>
       </div>
@@ -402,8 +441,10 @@ async function pagePlayer(sid) {
     ["Headshots", pct(p.hs_pct), `${p.hs_kills} HS kills`], ["Opening duels", pct(p.entry_win_pct), `${p.entry_wins}/${p.entry_attempts} won`],
     ["Clutches", `${p.clutch_wins}/${p.clutch_attempts}`, `${p.aces} aces · ${p.k4} 4Ks`], ["Utility dmg", f1(p.util_adr), "per round"],
   ];
-  $app.innerHTML = `
-    <div class="crumb"><a data-nav href="/">← Leaderboard</a></div>
+  const ach = d.achievements || [], got = ach.filter((a) => a.unlocked);
+  const op = d.openings || {}, hh = d.head_to_head || {opponents: [], teammates: []};
+  const sideTxt = (x) => (x && x.attempts ? `${pct(x.win_pct)} <span class="tile-sub">${x.wins}/${x.attempts}</span>` : "–");
+  $app.innerHTML = `${nav("")}
     <section class="card hero">
       <div><h1>${esc(p.name)}</h1>
         <div class="meta">${p.position ? `#${p.position} of ${d.group_size} on the leaderboard · ` : ""}${p.matches} matches · ${p.wins}W–${p.losses}L (${pct(100 * p.wins / Math.max(p.matches, 1))}) · ${p.rounds} rounds
@@ -423,8 +464,55 @@ async function pagePlayer(sid) {
       <section class="card"><h2>Elo over time</h2><p class="note">After each match, oldest on the left. Green dots are wins.</p>${p.placed ? trend(h, "elo_after") : `<div class="empty">Shows after ${PLACEMENTS} placement matches (${p.elo_matches || 0}/${PLACEMENTS} played).</div>`}</section>
       <section class="card"><h2>Rating 3.0 over time</h2><p class="note">Each dot is one match; the dashed line is the group average.</p>${trend(h, "rating")}</section>
     </div>
-    <section class="card"><h2>Matches</h2><p class="note">Click a match for the full scorecard.</p><div class="scroll" id="hist"></div></section>
+    <section class="card"><h2>Achievements <span class="tag">${got.length}/${ach.length}</span></h2><p class="note">Hover a badge for how it's earned. Rarity is the share of our players who have it.</p>
+      <div class="ach-grid">${[...got, ...ach.filter((a) => !a.unlocked)].map((a) => `<div class="ach ${a.unlocked ? "" : "locked"}" title="${esc(a.description)} · ${a.rarity}% of players${a.unlocked && a.first_at ? " · first " + fmtDate(a.first_at) : ""}">${achImg(a)}${a.count > 1 ? `<span class="cnt">×${a.count}</span>` : ""}<b>${esc(a.name)}</b></div>`).join("")}</div></section>
+    <div class="grid2">
+      <section class="card"><h2>Opening duels</h2><p class="note">The first kill of each round, won or lost. Side split needs demos read by this version.</p>
+        <div class="tiles">
+          <div><div class="tile-label">Won</div><div class="tile-num">${pctOrDash(op.win_pct)}</div><div class="tile-sub">${op.wins || 0}/${op.attempts || 0} duels</div></div>
+          <div><div class="tile-label">Taken</div><div class="tile-num">${f0(op.attempt_rate)}%</div><div class="tile-sub">of rounds you're in the first duel</div></div>
+          <div><div class="tile-label">As T</div><div class="tile-num">${sideTxt(op.t)}</div></div>
+          <div><div class="tile-label">As CT</div><div class="tile-num">${sideTxt(op.ct)}</div></div>
+          <div><div class="tile-label">Maps with 3+ opening kills</div><div class="tile-num">${pctOrDash(op.win_pct_3plus_openers)}</div><div class="tile-sub">won</div></div>
+        </div></section>
+      <section class="card"><h2>Rivals</h2><p class="note">From who killed who in every demo.</p>
+        <div class="sup">
+          <div class="card"><div class="k">Nemesis</div><div class="v">${hh.nemesis ? pLink(hh.nemesis.steamid, hh.nemesis.name) : "–"}</div><div class="s">${hh.nemesis ? `killed you ${hh.nemesis.deaths}×, you got them ${hh.nemesis.kills}×` : "Nobody has your number"}</div></div>
+          <div class="card"><div class="k">Favorite victim</div><div class="v">${hh.favorite_victim ? pLink(hh.favorite_victim.steamid, hh.favorite_victim.name) : "–"}</div><div class="s">${hh.favorite_victim ? `you killed them ${hh.favorite_victim.kills}×, they got you ${hh.favorite_victim.deaths}×` : ""}</div></div>
+          <div class="card"><div class="k">Best teammate</div><div class="v">${(() => { const b = hh.teammates.filter((t) => t.games >= 3).sort((a, b) => b.win_pct - a.win_pct)[0]; return b ? `${pLink(b.steamid, b.name)}</div><div class="s">${b.wins}-${b.games - b.wins} together (${pct(b.win_pct)})` : `–</div><div class="s">3+ games together needed`; })()}</div></div>
+        </div></section>
+    </div>
+    <section class="card"><h2>Head to head</h2><p class="note">Your record against each opponent: maps on opposite teams, kills and deaths between you, and opening duels between you.</p><div class="scroll" id="h2h"></div></section>
+    <section class="card"><h2>Teammates</h2><p class="note">How you do with each player on your side.</p><div class="scroll" id="mates"></div></section>
+    ${(d.seasons || []).length ? `<section class="card"><h2>Seasons</h2><div class="scroll">${table("seas", [
+      {k: "name", label: "Season", left: true, fmt: (r) => `<b>${esc(r.name)}</b>${r.current ? ' <span class="tag">now</span>' : ""}`, nosort: true},
+      {k: "rank", label: "Final rank", left: true, nosort: true, fmt: (r) => (r.elo != null ? rankCell(r) : `<span class="tile-sub">${esc(r.rank_name)}</span>`)},
+      {k: "position", label: "Finish", nosort: true, fmt: (r) => (r.position ? "#" + r.position : "–")},
+      {k: "matches", label: "Matches", nosort: true}], d.seasons)}</div></section>` : ""}
+    <section class="card"><h2>Matches</h2><p class="note">Click a match for the full scorecard. Odds are your team's predicted chance before the match.</p><div class="scroll" id="hist"></div></section>
     <section class="card"><h2>By map</h2><div class="scroll" id="maps"></div></section>`;
+  const drawH2H = () => {
+    table.onSort.h2h = drawH2H;
+    document.getElementById("h2h").innerHTML = table("h2h", [
+      {k: "name", label: "Opponent", left: true, fmt: (r) => `<span class="pname">${pLink(r.steamid, r.name)}</span>`, sort: (r) => r.name.toLowerCase()},
+      {k: "games", label: "Maps vs"}, {k: "wins", label: "Record", fmt: (r) => `${r.wins}-${r.games - r.wins}`},
+      {k: "kills", label: "You killed"}, {k: "deaths", label: "Killed you"},
+      {k: "diff", label: "+/−", fmt: (r) => { const v = r.kills - r.deaths; return `<span class="${v > 0 ? "good" : v < 0 ? "bad" : ""}">${v > 0 ? "+" : ""}${v}</span>`; }, sort: (r) => r.kills - r.deaths},
+      {k: "openings_won", label: "Openings", fmt: (r) => `${r.openings_won}-${r.openings_lost}`, sort: (r) => r.openings_won - r.openings_lost, title: "Opening duels between you two: won-lost"},
+      {k: "hs", label: "HS on them", fmt: (r) => (r.kills ? pct((100 * r.hs) / r.kills) : "–"), sort: (r) => r.hs / Math.max(r.kills, 1)},
+    ], hh.opponents, {sortKey: "games", href: (r) => "/player/" + r.steamid});
+  };
+  drawH2H();
+  const drawMates = () => {
+    table.onSort.mates = drawMates;
+    document.getElementById("mates").innerHTML = table("mates", [
+      {k: "name", label: "Teammate", left: true, fmt: (r) => `<span class="pname">${pLink(r.steamid, r.name)}</span>`, sort: (r) => r.name.toLowerCase()},
+      {k: "games", label: "Maps"}, {k: "wins", label: "Record", fmt: (r) => `${r.wins}-${r.games - r.wins}`},
+      {k: "win_pct", label: "Win", fmt: (r) => pct(r.win_pct)},
+      {k: "rating", label: "Avg rating (both)", fmt: (r) => rt(r.rating), sort: (r) => (r.rating == null ? -9 : r.rating)},
+    ], hh.teammates, {sortKey: "games", href: (r) => "/player/" + r.steamid});
+  };
+  drawMates();
   const drawHist = () => {
     table.onSort.hist = drawHist;
     document.getElementById("hist").innerHTML = table("hist", [
@@ -438,6 +526,7 @@ async function pagePlayer(sid) {
       {k: "hs", label: "HS", fmt: (r) => pct((100 * r.hs_kills) / Math.max(r.kills, 1)), sort: (r) => r.hs_kills / Math.max(r.kills, 1)},
       {k: "swing_pr", label: "Swing", fmt: (r) => swingTxt(r.swing_pr), cls: (r) => swingCls(r.swing_pr), sort: (r) => (r.swing_pr == null ? -999 : r.swing_pr)},
       {k: "rating", label: "Rating", fmt: (r) => rt(r.rating), cls: (r) => "b " + ratingCls(r.rating), sort: (r) => (r.rating == null ? -9 : r.rating)},
+      {k: "win_prob", label: "Odds", fmt: (r) => (r.win_prob == null ? "–" : `<span class="${r.result === "W" && r.win_prob < 0.4 ? "upset" : ""}">${pct(100 * r.win_prob)}</span>`), sort: (r) => num(r.win_prob), title: "Your team's predicted chance before the match (gold = upset win)"},
       {k: "elo_delta", label: "Elo", fmt: (r) => `${delta(r.elo_delta)} <span class="tile-sub">${r.elo_after ?? ""}</span>`, sort: (r) => num(r.elo_delta)},
     ], h, {sortKey: "played_at", href: (r) => "/match/" + r.match_id});
   };
@@ -551,19 +640,101 @@ async function pageMatch(id) {
     {k: "elo_delta", label: "Elo", fmt: (r) => `${delta(r.elo_delta)} <span class="tile-sub">${r.elo_after ?? ""}</span>`, sort: (r) => num(r.elo_delta), title: "Elo change from this match, and Elo after it"},
   ];
   const team = (t) => ps.filter((p) => p.team === t);
-  $app.innerHTML = `
-    <div class="crumb"><a data-nav href="/">← Leaderboard</a></div>
+  const od = d.odds;
+  $app.innerHTML = `${nav("")}
     <section class="card hero">
       <div><h1>${esc(mapName(m.map))}</h1><div class="meta">${fmtDate(m.played_at, true)} · ${m.rounds} rounds · match #${m.id} · ${m.source === "demo" ? "from MatchZy demo" : "from server log"}</div></div>
       <div class="score"><span class="a">${m.score_a}</span><span style="color:var(--faint)">:</span><span class="b">${m.score_b}</span></div>
     </section>
     ${rounds ? `<section class="card"><h2>Rounds</h2><p class="note"><span class="sw" style="background:var(--team-a)"></span>${esc(ta)} &nbsp; <span class="sw" style="background:var(--team-b)"></span>${esc(tb)} · gap marks halftime</p><div class="rounds">${rounds}</div></section>` : ""}
-    ${d.highlights.length ? `<div class="hl">${d.highlights.map((x) => `<div class="card"><div class="t">${x.icon} ${esc(x.title)}</div><div class="p">${pLink(x.steamid, x.name)}</div><div class="x">${esc(x.text)}</div></div>`).join("")}</div>` : ""}
+    ${od ? `<section class="card"><h2>Pre-match odds ${od.upset ? '<span class="tag upset">Upset</span>' : ""}</h2><p class="note">Each team's chance to win before the match, from everyone's Elo at the time.</p>
+      <div class="odds"><div class="a" style="width:${100 * od.win_prob_a}%">${esc(ta)} ${pct(100 * od.win_prob_a)}</div><div class="b" style="width:${100 * od.win_prob_b}%">${pct(100 * od.win_prob_b)} ${esc(tb)}</div></div></section>` : ""}
+    ${(d.achievements || []).length ? `<section class="card"><h2>Achievements unlocked</h2><div class="ach-grid">${d.achievements.map((a) => `<div class="ach" title="${esc(a.description)}">${achImg(a)}<b>${esc(a.name)}</b>${pLink(a.steamid, a.player)}</div>`).join("")}</div></section>` : ""}
+    ${d.highlights.length ? `<div class="hl">${d.highlights.map((x) => `<div class="card"><div class="t" style="display:flex;align-items:center;gap:6px">${achImg({id: HL_ICON[x.key] || "star"}, 22)} ${esc(x.title)}</div><div class="p">${pLink(x.steamid, x.name)}</div><div class="x">${esc(x.text)}</div></div>`).join("")}</div>` : ""}
     ${["A", "B"].map((t) => `<section class="card"><div class="teamhead"><h2><span class="dot${t}"></span>${esc(t === "A" ? ta : tb)}</h2><b>${t === "A" ? m.score_a : m.score_b}${(t === "A" ? m.score_a > m.score_b : m.score_b > m.score_a) ? " 🏆" : ""}</b></div><div class="scroll" id="team${t}"></div></section>`).join("")}`;
   for (const t of ["A", "B"]) {
     const draw = () => { table.onSort["t" + t] = draw; document.getElementById("team" + t).innerHTML = table("t" + t, cols, team(t), {sortKey: "rating", href: (r) => "/player/" + r.steamid}); };
     draw();
   }
+}
+
+// ---------------------------------------------------------------- community page
+async function pageCommunity() {
+  const [rc, sup, ss] = await Promise.all([api("recap?days=7"), api("superlatives"), api("seasons"), loadRanks()]);
+  document.title = "Community · CS2 5v5";
+  const card = (k, v, sub) => `<div class="card"><div class="k">${k}</div><div class="v">${v}</div><div class="s">${sub || ""}</div></div>`;
+  const pl = (x) => (x ? pLink(x.steamid, x.name) : "–");
+  const cur = ss.seasons.find((x) => x.current);
+  $app.innerHTML = `${nav("/community")}
+    <div class="top"><div><h1 class="brand">This week</h1>
+      <p class="take">${rc.matches ? `${rc.matches} maps, ${rc.rounds} rounds and ${rc.players} players in the last 7 days.` : "No matches in the last 7 days."}${cur ? ` ${esc(cur.name)} ends ${fmtDate(new Date(new Date(cur.end) - 1))}.` : ""}</p></div></div>
+    ${rc.matches ? `<div class="sup">
+      ${card("Player of the week", pl(rc.top_rating), rc.top_rating ? `${rt(rc.top_rating.rating)} avg rating over ${rc.top_rating.maps} maps` : "")}
+      ${card("Biggest climber", rc.top_elo && rc.top_elo.elo_change > 0 ? pl(rc.top_elo) : "–", rc.top_elo && rc.top_elo.elo_change > 0 ? `+${rc.top_elo.elo_change} Elo` : "")}
+      ${card("Most kills", pl(rc.top_kills), rc.top_kills ? `${rc.top_kills.kills} kills` : "")}
+      ${card("Best single game", rc.best_game ? pLink(rc.best_game.steamid, rc.best_game.name) : "–", rc.best_game ? `<a data-nav href="/match/${rc.best_game.match_id}">${rt(rc.best_game.rating)} on ${esc(mapName(rc.best_game.map))}, ${rc.best_game.kills}-${rc.best_game.deaths}</a>` : "")}
+      ${card("Biggest upset", rc.upset ? `<a data-nav href="/match/${rc.upset.match_id}">${esc(mapName(rc.upset.map))} ${esc(rc.upset.score)}</a>` : "–", rc.upset ? `won with a ${pct(100 * rc.upset.chance)} chance: ${esc(rc.upset.winners.join(", "))}` : "")}
+      ${card("Duo of the week", rc.best_duo ? duoNames(rc.best_duo) : "–", rc.best_duo ? `${rc.best_duo.wins}-${rc.best_duo.games - rc.best_duo.wins} together` : "")}
+      ${rc.most_clutches ? card("Clutch king", pl(rc.most_clutches), `${rc.most_clutches.clutches} clutches won`) : ""}
+      ${rc.most_aces ? card("Aces", pl(rc.most_aces), `${rc.most_aces.aces} ace${rc.most_aces.aces > 1 ? "s" : ""}`) : ""}
+    </div>` : ""}
+    ${rc.achievements.length ? `<section class="card"><h2>New achievements this week</h2><div class="ach-grid">${rc.achievements.map((a) => `<div class="ach" title="${esc(a.description)}">${achImg(a)}<b>${esc(a.name)}</b>${pLink(a.steamid, a.player)}</div>`).join("")}</div></section>` : ""}
+    <h1 class="brand" style="margin-top:8px">All time</h1>
+    <div class="sup">
+      ${card("Best duo", sup.best_duo ? duoNames(sup.best_duo) : "–", sup.best_duo ? `${sup.best_duo.wins}-${sup.best_duo.games - sup.best_duo.wins} together (${pct(sup.best_duo.win_pct)})` : "3+ maps together needed")}
+      ${card("Most cursed duo", sup.worst_duo ? duoNames(sup.worst_duo) : "–", sup.worst_duo ? `${sup.worst_duo.wins}-${sup.worst_duo.games - sup.worst_duo.wins} together (${pct(sup.worst_duo.win_pct)})` : "")}
+      ${card("Inseparable", sup.most_played_duo ? duoNames(sup.most_played_duo) : "–", sup.most_played_duo ? `${sup.most_played_duo.games} maps on the same team` : "")}
+      ${card("Best-rated duo", sup.best_rated_duo ? duoNames(sup.best_rated_duo) : "–", sup.best_rated_duo ? `${rt(sup.best_rated_duo.rating)} average rating together` : "")}
+      ${card("Biggest rivalry", sup.rivalry ? sup.rivalry.players.map((p) => pLink(p.steamid, p.name)).join(" vs ") : "–", sup.rivalry ? `${sup.rivalry.players[0].kills}–${sup.rivalry.players[1].kills} in kills over ${sup.rivalry.games} maps` : "")}
+      ${card("Most one-sided", sup.one_sided ? (() => { const [a, b] = [...sup.one_sided.players].sort((x, y) => y.kills - x.kills); return `${pLink(a.steamid, a.name)} owns ${pLink(b.steamid, b.name)}`; })() : "–", sup.one_sided ? `${Math.max(...sup.one_sided.players.map((p) => p.kills))}–${Math.min(...sup.one_sided.players.map((p) => p.kills))} in kills` : "")}
+    </div>
+    <div class="grid2">
+      <section class="card"><h2>Duos</h2><p class="note">Pairs with 3+ maps on the same team.</p><div class="scroll" id="duos"></div></section>
+      <section class="card"><h2>Rivalries</h2><p class="note">Pairs with 3+ maps on opposite teams: kills on each other and map wins against each other.</p><div class="scroll" id="rivals"></div></section>
+    </div>
+    ${rc.matches ? `<section class="card"><h2>Last 7 days</h2><div class="scroll" id="week"></div></section>` : ""}`;
+  const drawDuos = () => { table.onSort.duos = drawDuos; document.getElementById("duos").innerHTML = table("duos", [
+    {k: "players", label: "Duo", left: true, fmt: duoNames, nosort: true},
+    {k: "games", label: "Maps"}, {k: "wins", label: "Record", fmt: (r) => `${r.wins}-${r.games - r.wins}`},
+    {k: "win_pct", label: "Win", fmt: (r) => pct(r.win_pct)}, {k: "rating", label: "Avg rating", fmt: (r) => rt(r.rating), sort: (r) => (r.rating == null ? -9 : r.rating)}], sup.duos, {sortKey: "win_pct"}); };
+  drawDuos();
+  const drawRivals = () => { table.onSort.rivals = drawRivals; document.getElementById("rivals").innerHTML = table("rivals", [
+    {k: "players", label: "Rivals", left: true, nosort: true, fmt: (r) => r.players.map((p) => pLink(p.steamid, p.name)).join(" vs ")},
+    {k: "games", label: "Maps"}, {k: "kills", label: "Kills", nosort: true, fmt: (r) => `${r.players[0].kills}–${r.players[1].kills}`},
+    {k: "wins", label: "Map wins", nosort: true, fmt: (r) => `${r.players[0].wins}–${r.players[1].wins}`}, {k: "total", label: "Total kills"}], sup.rivalries, {sortKey: "total"}); };
+  drawRivals();
+  if (rc.matches) {
+    const drawWeek = () => { table.onSort.week = drawWeek; document.getElementById("week").innerHTML = table("week", [
+      {k: "name", label: "Player", left: true, fmt: (r) => `<span class="pname">${pLink(r.steamid, r.name)}</span>`, sort: (r) => r.name.toLowerCase()},
+      {k: "maps", label: "Maps"}, {k: "wins", label: "W"}, {k: "rating", label: "Rating", fmt: (r) => rt(r.rating), cls: "b", sort: (r) => (r.rating == null ? -9 : r.rating)},
+      {k: "kills", label: "K"}, {k: "deaths", label: "D"}, {k: "adr", label: "ADR", fmt: (r) => f1(r.adr)},
+      {k: "openings", label: "Openings won"}, {k: "clutches", label: "Clutches"},
+      {k: "elo_change", label: "Elo", fmt: (r) => delta(r.elo_change), sort: (r) => num(r.elo_change)}], rc.table, {sortKey: "rating", href: (r) => "/player/" + r.steamid}); };
+    drawWeek();
+  }
+}
+
+async function pageAchievements() {
+  const d = await api("achievements");
+  document.title = "Achievements · CS2 5v5";
+  const tiers = {elite: "Elite", gold: "Gold", silver: "Silver", bronze: "Bronze", shame: "Hall of shame"};
+  $app.innerHTML = `${nav("/achievements")}
+    <div class="top"><div><h1 class="brand">Achievements</h1><p class="take">Earned automatically from match demos. Rarity is the share of our players who have each one. New ones are announced with the match scorecard in Discord.</p></div></div>
+    ${Object.entries(tiers).map(([t, label]) => { const xs = d.achievements.filter((a) => a.tier === t); return xs.length ? `<section class="card"><h2>${label}</h2>${xs.sort((a, b) => a.rarity - b.rarity).map((a) => `<div class="ach-row">${achImg(a, 48)}<div><b>${esc(a.name)}</b><div class="d">${esc(a.description)}</div></div><div class="d" style="text-align:right">${a.holders} player${a.holders === 1 ? "" : "s"}<br>${a.rarity}%</div></div>`).join("")}</section>` : ""; }).join("")}`;
+}
+
+async function pageSeasons() {
+  const [d] = await Promise.all([api("seasons"), loadRanks()]);
+  document.title = "Seasons · CS2 5v5";
+  $app.innerHTML = `${nav("/seasons")}
+    <div class="top"><div><h1 class="brand">Seasons</h1><p class="take">A season lasts ${d.season_months} months. When a new one starts, everyone's Elo moves ${Math.round(100 * (1 - d.carry))}% of the way back to 1500 and ranks hide until you play ${d.season_placement} matches in the new season. The final top 3 earn the Podium achievement, and #1 is Season Champion.</p></div></div>
+    ${d.seasons.map((x) => `<section class="card"><h2>${esc(x.name)} ${x.current ? '<span class="tag">now</span>' : x.finished ? '<span class="tag">final</span>' : ""}</h2>
+      <p class="note">${fmtDate(x.start)} – ${fmtDate(new Date(new Date(x.end) - 1))}${x.current ? " · live standings" : ""} · <a data-nav href="/" onclick="LB.period='s${x.season}'">season leaderboard →</a></p>
+      <div class="scroll">${table("season" + x.season, [
+        {k: "pos", label: "#", nosort: true, fmt: (r) => x.players.indexOf(r) + 1},
+        {k: "name", label: "Player", left: true, nosort: true, fmt: (r) => `<span class="pname">${pLink(r.steamid, r.name)}</span>`},
+        {k: "elo", label: "Rank · Elo", left: true, nosort: true, fmt: rankCell},
+        {k: "season_matches", label: "Matches", nosort: true}], x.players)}</div></section>`).join("")}`;
 }
 
 // ---------------------------------------------------------------- router
@@ -573,10 +744,13 @@ async function route() {
   try {
     if ((m = path.match(/^\/player\/(\d{17})\/?$/))) await pagePlayer(m[1]);
     else if ((m = path.match(/^\/match\/(\d+)\/?$/))) await pageMatch(m[1]);
+    else if (/^\/community\/?$/.test(path)) await pageCommunity();
+    else if (/^\/achievements\/?$/.test(path)) await pageAchievements();
+    else if (/^\/seasons\/?$/.test(path)) await pageSeasons();
     else await pageHome();
     window.scrollTo(0, 0);
   } catch (e) {
-    $app.innerHTML = `<div class="crumb"><a data-nav href="/">← Leaderboard</a></div><div class="card empty err">${esc(e.message || e)}</div>`;
+    $app.innerHTML = `${nav("")}<div class="card empty err">${esc(e.message || e)}</div>`;
   }
 }
 route();

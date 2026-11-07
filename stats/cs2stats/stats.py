@@ -41,6 +41,14 @@ class PlayerMatch:
     kast_rounds: int = 0
     entry_attempts: int = 0
     entry_wins: int = 0
+    entry_attempts_t: int = 0   # opening duels split by side
+    entry_wins_t: int = 0
+    entry_attempts_ct: int = 0
+    entry_wins_ct: int = 0
+    knife_kills: int = 0
+    awp_kills: int = 0
+    plants: int = 0
+    defuses: int = 0
     trade_kills: int = 0
     traded_deaths: int = 0
     clutch_attempts: int = 0
@@ -135,6 +143,7 @@ def compute(match: MatchData) -> tuple[dict[str, PlayerMatch], dict]:
 
     team_score = {"A": 0, "B": 0}
     side_team_by_round = []
+    pairs = defaultdict(lambda: [0, 0, 0])   # (killer, victim) -> [kills, headshots, opening kills]
     round_log = []              # per round: "A"/"B" winner (lowercase = won while on T side), "-" = unknown
 
     for rnd in rounds:
@@ -187,6 +196,11 @@ def compute(match: MatchData) -> tuple[dict[str, PlayerMatch], dict]:
             elif side(b.attacker) == side(b.victim):
                 p(b.attacker).team_flashed += 1
 
+        if rnd.planter in roster:
+            p(rnd.planter).plants += 1
+        if rnd.defuser in roster:
+            p(rnd.defuser).defuses += 1
+
         # ---- kills, KAST, entries, trades, clutches ----
         alive = {T: {s for s, sd in roster.items() if sd == T},
                  CT: {s for s, sd in roster.items() if sd == CT}}
@@ -215,10 +229,22 @@ def compute(match: MatchData) -> tuple[dict[str, PlayerMatch], dict]:
                 pa.hs_kills += int(k.headshot)
                 round_kills[a] += 1
                 got_k.add(a)
+                if k.weapon.startswith(KNIFE_PREFIXES):
+                    pa.knife_kills += 1
+                elif k.weapon == "awp":
+                    pa.awp_kills += 1
+                pair = pairs[(a, v)]
+                pair[0] += 1
+                pair[1] += int(k.headshot)
                 if not first_kill_done:
                     pa.entry_attempts += 1
                     pa.entry_wins += 1
                     p(v).entry_attempts += 1
+                    sa, sv = ("t" if side(a) == T else "ct"), ("t" if side(v) == T else "ct")
+                    setattr(pa, f"entry_attempts_{sa}", getattr(pa, f"entry_attempts_{sa}") + 1)
+                    setattr(pa, f"entry_wins_{sa}", getattr(pa, f"entry_wins_{sa}") + 1)
+                    setattr(p(v), f"entry_attempts_{sv}", getattr(p(v), f"entry_attempts_{sv}") + 1)
+                    pair[2] += 1
                     first_kill_done = True
                 # trade: did the victim kill one of my teammates recently?
                 for t, dv, killer in recent_deaths:
@@ -298,5 +324,7 @@ def compute(match: MatchData) -> tuple[dict[str, PlayerMatch], dict]:
          (pm.kills or pm.deaths or pm.assists or pm.damage or pm.enemies_flashed or pm.teamkills)}
     summary = {"rounds": len(rounds), "score_a": a, "score_b": b, "map": match.map_name,
                "game_mode": match.game_mode, "purchases": match.purchases,
-               "round_log": "".join(round_log)}
+               "round_log": "".join(round_log),
+               "pairs": [(a_, v_, n, hs, op) for (a_, v_), (n, hs, op) in pairs.items()
+                         if a_ in P and v_ in P]}
     return P, summary

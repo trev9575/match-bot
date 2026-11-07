@@ -1,6 +1,8 @@
 const { SlashCommandBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, UserSelectMenuBuilder } = require("discord.js");
 const { buildConnectMessage } = require("../lib/serverInfo");
 const teams = require("../lib/teams");
+const { predictionEmbed } = require("../lib/prediction");
+const { lobbyChannelId, moveTeamsToLobby } = require("../lib/voice");
 
 const MAX_PLAYERS = 20;
 
@@ -29,6 +31,10 @@ function lobbyComponents(matchId) {
             new ButtonBuilder()
                 .setCustomId(`chooseplayers:${matchId}`)
                 .setLabel("Choose Players")
+                .setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder()
+                .setCustomId(`mapvote:${matchId}`)
+                .setLabel("Map Vote")
                 .setStyle(ButtonStyle.Secondary)
         )
     ];
@@ -62,10 +68,23 @@ module.exports = {
         if (client.matches.has(matchId))
             return interaction.reply({ content: "That match ID already exists.", ephemeral: true });
 
+        await openLobby(client, {
+            matchId,
+            adminId: interaction.user.id,
+            lobbyVoiceId: interaction.member?.voice?.channelId,
+            send: async (payload) => { await interaction.reply(payload); return interaction.fetchReply(); }
+        });
+    },
+    openLobby
+};
+
+// Creates a lobby and posts it with send(payload) -> Message. Used by /startmatch and match nights.
+async function openLobby(client, { matchId = Date.now().toString(), adminId, players = [], lobbyVoiceId = null, send, intro = null }) {
         const match = {
             id: matchId,
-            adminId: interaction.user.id,
-            players: [],
+            adminId,
+            lobbyVoiceId,
+            players: players.slice(0, MAX_PLAYERS),
             captains: [],
             team1: [],
             team2: [],
@@ -260,8 +279,13 @@ module.exports = {
                         new ButtonBuilder()
                             .setCustomId(`move_players:${matchId}`)
                             .setLabel("Move Players to Voice")
-                            .setStyle(ButtonStyle.Primary)
+                            .setStyle(ButtonStyle.Primary),
+                        new ButtonBuilder()
+                            .setCustomId(`tolobby:${matchId}`)
+                            .setLabel("Back to Lobby")
+                            .setStyle(ButtonStyle.Secondary)
                     );
+                    if (match.map) embed.addFields({ name: "Map", value: require("../lib/mapVote").pretty(match.map) });
                     rows.push(controlRow);
                 }
 
@@ -306,6 +330,7 @@ module.exports = {
                 // If draft finished, move players into voice channels automatically
                 if (available.length === 0) {
                     await match.showDraftBoard(interaction); // show final team board with connect button
+                    await match.postPrediction(interaction.channel, interaction.guild);
                     await match.movePlayers(interaction, client);
                     return;
                 }
@@ -330,7 +355,27 @@ module.exports = {
 
                 await interaction.channel.send({ embeds: [teams.balanceEmbed(result, interaction.guild)] });
                 await match.showDraftBoard(interaction);   // final board: connect info + move button
+                await match.postPrediction(interaction.channel, interaction.guild);
                 await match.movePlayers(interaction, client);
+            },
+
+            // Win odds and each player's Elo at stake, once teams are set
+            async postPrediction(channel, guild) {
+                const name = (id) => `Team ${guild?.members.cache.get(id)?.displayName || "?"}`;
+                const e = await predictionEmbed(match.team1, match.team2, name(match.captains[0]), name(match.captains[1]));
+                if (e) { try { await channel.send({ embeds: [e] }); } catch (_) {} }
+            },
+
+            // "Back to Lobby": everyone in the team channels goes back to the lobby voice channel
+            async backToLobby(interaction) {
+                if (!teams.canRun(interaction, match) && !match.team1.concat(match.team2).includes(interaction.user.id))
+                    return interaction.reply({ content: "Only players in this match can do that.", ephemeral: true });
+                const lobby = lobbyChannelId(match.lobbyVoiceId);
+                if (!lobby)
+                    return interaction.reply({ content: "No lobby voice channel set (LOBBY_VOICE_CHANNEL_ID), and the match starter wasn't in voice.", ephemeral: true });
+                await interaction.deferReply();
+                const n = await moveTeamsToLobby(interaction.guild, lobby);
+                await interaction.editReply(n ? `Moved ${n} player${n === 1 ? "" : "s"} back to <#${lobby}>.` : "Nobody was in the team channels.");
             },
 
             // Move users into configured voice channels
@@ -384,13 +429,16 @@ module.exports = {
         client.matches.set(matchId, match);
 
         // Send initial lobby message (kept so the private player picker can edit it later)
-        const embed = {
-            title: `Match Lobby: ${matchId}`,
-            description: "Click below to join.",
-            color: 0x00AEFF
-        };
+        const embed = match.players.length ? lobbyEmbed(matchId, match.players) : new EmbedBuilder()
+            .setTitle(`Match Lobby: ${matchId}`)
+            .setDescription("Click below to join.")
+            .setColor(0x00AEFF);
 
-        await interaction.reply({ embeds: [embed], components: lobbyComponents(matchId) });
-        try { match.lobbyMessage = await interaction.fetchReply(); } catch (_) {}
-    }
-};
+        try {
+            match.lobbyMessage = await send({ content: intro || undefined, embeds: [embed], components: lobbyComponents(matchId) });
+        } catch (err) {
+            client.matches.delete(matchId);
+            throw err;
+        }
+        return match;
+}

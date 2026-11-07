@@ -163,6 +163,27 @@ class DemoWatcher:
                 await self.on_new(mid)
         return mid, why
 
+    async def refresh_one(self, paths: dict) -> bool:
+        """Re-read one demo imported by an older version, to fill in newer details
+        (who-killed-who, side splits). Same match id; nothing is re-announced."""
+        stale = self.db.stale_demos()
+        if not stale:
+            return False
+        name, mid = next(iter(sorted(stale.items(), key=lambda kv: kv[1])))
+        path = paths.get(name)
+        if not path:
+            self.db.mark_details(mid)              # demo deleted; keep what we have
+            return True
+        loop = asyncio.get_running_loop()
+        try:
+            _, _, _, summary, players = await loop.run_in_executor(self.pool, analyze_demo, path)
+            self.db.refresh_details(mid, summary, players)
+            log.info("refreshed details for match #%s from %s", mid, name)
+        except Exception:
+            log.exception("could not re-read %s", name)
+            self.db.mark_details(mid)
+        return True
+
     async def run(self, backfill_announce=False):
         first = True
         while True:
@@ -170,7 +191,9 @@ class DemoWatcher:
                 now = loop_time()
                 if self.done is None:
                     self.done = self.db.demo_keys()
-                for path in self._candidates():
+                busy = False
+                candidates = self._candidates()
+                for path in candidates:
                     name = os.path.basename(path)
                     if name in self.skipped or name in self.done:
                         continue
@@ -179,14 +202,25 @@ class DemoWatcher:
                     if prev is None or prev[0] != size:
                         self.sizes[name] = (size, now)
                         if not first:
+                            busy = True
                             continue
                     # on first pass, files untouched for a while are already done
                     age = now - os.path.getmtime(path)
                     if (prev and now - prev[1] >= self.stable) or age >= self.stable:
                         await self.process(path, announce=(not first) or backfill_announce)
                         self.done.add(name)                # imported or skipped: never re-read
+                        busy = True
                         await asyncio.sleep(self.pause)    # breathe between demos during a backfill
+                    elif name not in self.done:
+                        busy = True                        # a demo is still being written
                 first = False
+                # quiet moment: upgrade older imports a few at a time
+                if not busy:
+                    paths = {os.path.basename(p): p for p in candidates}
+                    for _ in range(3):
+                        if not await self.refresh_one(paths):
+                            break
+                        await asyncio.sleep(self.pause)
             except Exception:
                 log.exception("watcher loop error")
             await asyncio.sleep(self.poll)
