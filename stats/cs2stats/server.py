@@ -11,6 +11,7 @@ Public (read-only) endpoints — used by the website:
   GET  /api/matches?limit=20&offset=0
   GET  /api/matches/<id>
   GET  /api/ranks                          rank bands + which custom badge images exist
+  GET  /api/join-check?host=<cs2 host>     {"home": true} if the visitor is on the server's own network
 
 Bot-only endpoints — need "Authorization: Bearer $STATS_API_KEY":
   GET  /api/announcements                 matches waiting to be posted to Discord
@@ -27,6 +28,8 @@ from __future__ import annotations
 
 import asyncio
 import hmac
+import ipaddress
+import socket
 import json
 import logging
 import mimetypes
@@ -79,6 +82,22 @@ def _since(period):
     except ValueError:
         return None
     return (datetime.now() - timedelta(days=days)).isoformat(timespec="seconds")
+
+
+_dns_cache: dict[str, tuple[float, set]] = {}
+
+
+def resolve(host: str) -> set:
+    """IPs for a hostname, cached for a minute."""
+    hit = _dns_cache.get(host)
+    if hit and time.time() - hit[0] < 60:
+        return hit[1]
+    try:
+        ips = {ai[4][0] for ai in socket.getaddrinfo(host, None)}
+    except OSError:
+        ips = set()
+    _dns_cache[host] = (time.time(), ips)
+    return ips
 
 
 def highlights(players: list[dict]) -> list[dict]:
@@ -298,6 +317,15 @@ class Handler(BaseHTTPRequestHandler):
     def _err(self, code, msg):
         self._json({"error": msg}, code)
 
+    def _client_ip(self):
+        """The visitor's address. Behind the Cloudflare tunnel every request comes from cloudflared,
+        so use the header Cloudflare adds; otherwise the direct connection."""
+        for h in ("CF-Connecting-IP", "X-Forwarded-For"):
+            v = self.headers.get(h, "").split(",")[0].strip()
+            if v:
+                return v
+        return self.client_address[0]
+
     def _authed(self):
         key = self.svc.api_key
         given = self.headers.get("Authorization", "").removeprefix("Bearer ").strip()
@@ -335,6 +363,19 @@ class Handler(BaseHTTPRequestHandler):
             if route == ["ranks"]:
                 return self._json({"ranks": elo_mod.ranks_table(), "images": svc.rank_images(),
                                    "placement_matches": elo_mod.PLACEMENT_MATCHES})
+            if route == ["join-check"]:
+                # On the server's home network the public address doesn't work (the router can't loop
+                # back), so the join page uses the LAN address. Home = a private address (opened on the
+                # LAN directly) or the same public IP as the CS2 server.
+                host = q.get("host", "")
+                if not re.fullmatch(r"[A-Za-z0-9.-]{1,253}", host):
+                    return self._err(400, "bad host")
+                try:
+                    ip = ipaddress.ip_address(self._client_ip())
+                except ValueError:
+                    return self._json({"home": False})
+                home = ip.is_private or ip.is_loopback or str(ip) in resolve(host)
+                return self._json({"home": home})
             if route == ["players"]:
                 return self._json(svc.db.player_names(q.get("q", ""), limit=25))
             if len(route) == 2 and route[0] == "players":

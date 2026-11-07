@@ -1,4 +1,4 @@
-import json, os, sys, threading, urllib.request, urllib.error
+import json, os, sys, threading, time, urllib.request, urllib.error
 from http.server import ThreadingHTTPServer
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from cs2stats import server
@@ -106,3 +106,17 @@ def test_admin_force_link_and_links_list(tmp_path, monkeypatch):
     code, r = call(base + "/api/links", key="secret")
     linked = {p["steamid"]: p["discord_id"] for p in r["players"]}
     assert len(r["players"]) == 10 and linked[SIDS[0]] == "2" and linked[SIDS[1]] is None
+
+
+def test_join_check_home_network(tmp_path, monkeypatch):
+    svc, base = start(tmp_path, monkeypatch)
+    # straight from the LAN/localhost: home
+    assert call(base + "/api/join-check?host=cs2.example.com")[1] == {"home": True}
+    def via_cloudflare(ip):
+        req = urllib.request.Request(base + "/api/join-check?host=cs2.example.com", headers={"CF-Connecting-IP": ip})
+        with urllib.request.urlopen(req) as r:
+            return json.loads(r.read())["home"]
+    server._dns_cache["cs2.example.com"] = (time.time(), {"75.117.140.191"})
+    assert via_cloudflare("75.117.140.191") is True          # same public IP as the game server
+    assert via_cloudflare("8.8.8.8") is False        # someone elsewhere
+    assert call(base + "/api/join-check?host=bad;host")[0] == 400

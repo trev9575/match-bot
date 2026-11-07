@@ -33,6 +33,7 @@
   <div id="ok" hidden>
     <h1 id="title">Opening CS2…</h1>
     <p>If your browser asks, choose <b>Open Steam</b>. CS2 starts if it isn't running, then joins the server.</p>
+    <p id="homenote" hidden>You're on the server's home network, so this joins the local address.</p>
     <a id="connect" class="button" href="#">Join server</a>
     <a id="launch" class="alt" href="#">CS2 didn't open? Launch CS2 and join →</a>
     <div class="box">
@@ -75,7 +76,31 @@
       document.getElementById("lanbox").hidden = false;
     }
     document.getElementById("ok").hidden = false;
-    location.href = connectUrl(address);
+
+    // On the server's own network the public address fails, so use the local one there.
+    // The page asks the stats site (which sees your public IP) and gives up after 1.5s.
+    (async () => {
+      let home = false;
+      try {
+        const host = address.split(":")[0];
+        const r = await fetch("/api/join-check?host=" + encodeURIComponent(host), { signal: AbortSignal.timeout(1500) });
+        home = (await r.json()).home === true;
+      } catch (_) {}
+      if (home) {
+        document.getElementById("title").textContent = "Opening CS2 (home network)…";
+        document.getElementById("homenote").hidden = false;
+        if (valid(lan)) {
+          document.getElementById("connect").href = connectUrl(lan);
+          document.getElementById("launch").href = launchUrl(lan);
+          location.href = connectUrl(lan);
+        } else {
+          // no LAN address configured: launching CS2 with +connect doesn't need Steam to reach the server first
+          location.href = launchUrl(address);
+        }
+      } else {
+        location.href = connectUrl(address);
+      }
+    })();
 
     // Once focus moves to Steam/CS2, close the tab (browsers only allow this for tabs they opened)
     let timer = null;
