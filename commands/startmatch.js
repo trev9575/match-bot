@@ -1,6 +1,50 @@
-const { SlashCommandBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder } = require("discord.js");
+const { SlashCommandBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, UserSelectMenuBuilder } = require("discord.js");
 const { buildConnectMessage } = require("../lib/serverInfo");
 const teams = require("../lib/teams");
+
+const MAX_PLAYERS = 20;
+
+// Lobby buttons: anyone can join; the second row is for whoever started the match
+function lobbyComponents(matchId) {
+    return [
+        new ActionRowBuilder().addComponents(
+            new ButtonBuilder()
+                .setCustomId(`join:${matchId}`)
+                .setLabel("Participate in Match")
+                .setStyle(ButtonStyle.Success)
+        ),
+        new ActionRowBuilder().addComponents(
+            new ButtonBuilder()
+                .setCustomId(`start_picking:${matchId}`)
+                .setLabel("Start Picking")
+                .setStyle(ButtonStyle.Primary),
+            new ButtonBuilder()
+                .setCustomId(`randomize:${matchId}`)
+                .setLabel("Randomize Teams (by Elo)")
+                .setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder()
+                .setCustomId(`addvoice:${matchId}`)
+                .setLabel("Add Everyone in Voice")
+                .setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder()
+                .setCustomId(`chooseplayers:${matchId}`)
+                .setLabel("Choose Players")
+                .setStyle(ButtonStyle.Secondary)
+        )
+    ];
+}
+
+function lobbyEmbed(matchId, players) {
+    return new EmbedBuilder()
+        .setTitle(`Match Lobby: ${matchId}`)
+        .setDescription(
+            players.length === 0
+                ? "No players have joined yet."
+                : players.map(id => `<@${id}>`).join("\n")
+        )
+        .setFooter({ text: `${players.length} player${players.length === 1 ? "" : "s"} · the second row of buttons is for whoever started the match` })
+        .setColor("Blue");
+}
 
 module.exports = {
     data: new SlashCommandBuilder()
@@ -29,40 +73,80 @@ module.exports = {
 
             // Update the original lobby message (used when someone clicks "Participate")
             async updateLobbyMessage(interaction) {
-                const embed = new EmbedBuilder()
-                    .setTitle(`Match Lobby: ${matchId}`)
-                    .setDescription(
-                        match.players.length === 0
-                            ? "No players have joined yet."
-                            : match.players.map(id => `<@${id}>`).join("\n")
-                    )
-                    .setColor("Blue");
-
-                const buttonsRow = new ActionRowBuilder().addComponents(
-                    new ButtonBuilder()
-                        .setCustomId(`join:${matchId}`)
-                        .setLabel("Participate in Match")
-                        .setStyle(ButtonStyle.Success),
-                    new ButtonBuilder()
-                        .setCustomId(`start_picking:${matchId}`)
-                        .setLabel("Start Picking")
-                        .setStyle(ButtonStyle.Primary),
-                    new ButtonBuilder()
-                        .setCustomId(`randomize:${matchId}`)
-                        .setLabel("Randomize Teams (by Elo)")
-                        .setStyle(ButtonStyle.Secondary)
-                );
+                const embed = lobbyEmbed(matchId, match.players);
+                const components = lobbyComponents(matchId);
 
                 // This expects to be called from the original lobby message interaction (button)
                 // Use update so the original message gets edited
                 try {
-                    await interaction.update({ embeds: [embed], components: [buttonsRow] });
+                    await interaction.update({ embeds: [embed], components });
                 } catch (err) {
                     // If we can't update (maybe interaction already acknowledged), fallback to channel edit/send
                     try {
-                        await interaction.channel.send({ embeds: [embed], components: [buttonsRow] });
+                        await interaction.channel.send({ embeds: [embed], components });
                     } catch (_) {}
                 }
+            },
+
+            // Edit the lobby message from somewhere else (e.g. the private "Choose Players" picker)
+            async refreshLobby() {
+                if (!match.lobbyMessage) return;
+                try {
+                    await match.lobbyMessage.edit({ embeds: [lobbyEmbed(matchId, match.players)], components: lobbyComponents(matchId) });
+                } catch (_) {}
+            },
+
+            // "Add Everyone in Voice": the starter's voice channel plus both team channels
+            async addVoicePlayers(interaction) {
+                if (!teams.canRun(interaction, match))
+                    return interaction.reply({ content: "Only the person who started the match can add players.", ephemeral: true });
+                const cfg = require("../config.json");
+                const ids = [interaction.member?.voice?.channelId, cfg.team1VoiceChannelId, cfg.team2VoiceChannelId];
+                const found = [];
+                for (const id of new Set(ids.filter(Boolean))) {
+                    const channel = interaction.guild.channels.cache.get(id);
+                    if (!channel || !channel.members) continue;
+                    for (const m of channel.members.values()) if (!m.user.bot) found.push(m.id);
+                }
+                const added = [], full = [];
+                for (const id of found) {
+                    if (match.players.includes(id)) continue;
+                    if (match.players.length >= MAX_PLAYERS) { full.push(id); continue; }
+                    match.players.push(id);
+                    added.push(id);
+                }
+                await match.updateLobbyMessage(interaction);
+                const msg = !found.length
+                    ? "Nobody is in voice. Join a voice channel first (or use the team channels), or use **Choose Players**."
+                    : (added.length ? `Added ${added.length}: ${added.map(id => `<@${id}>`).join(", ")}.` : "Everyone in voice was already in.") +
+                      (full.length ? ` The lobby is full (${MAX_PLAYERS}), so ${full.map(id => `<@${id}>`).join(", ")} couldn't be added.` : "");
+                try { await interaction.followUp({ content: msg, ephemeral: true }); } catch (_) {}
+            },
+
+            // "Choose Players": a private member picker, pre-filled with who's already in
+            async choosePlayers(interaction) {
+                if (!teams.canRun(interaction, match))
+                    return interaction.reply({ content: "Only the person who started the match can choose players.", ephemeral: true });
+                const picker = new UserSelectMenuBuilder()
+                    .setCustomId(`setplayers:${matchId}`)
+                    .setPlaceholder("Pick everyone who's playing")
+                    .setMinValues(0)
+                    .setMaxValues(MAX_PLAYERS);
+                if (match.players.length) picker.setDefaultUsers(match.players.slice(0, MAX_PLAYERS));
+                await interaction.reply({
+                    content: "Pick everyone who's playing. People already in the lobby are ticked; untick someone to take them out.",
+                    components: [new ActionRowBuilder().addComponents(picker)],
+                    ephemeral: true
+                });
+            },
+
+            async setPlayers(interaction) {
+                if (!teams.canRun(interaction, match))
+                    return interaction.reply({ content: "Only the person who started the match can choose players.", ephemeral: true });
+                const picked = interaction.values.filter(id => !interaction.users.get(id)?.bot);
+                match.players = picked.slice(0, MAX_PLAYERS);
+                await interaction.update({ content: `Lobby updated: ${match.players.length} player${match.players.length === 1 ? "" : "s"}.`, components: [] });
+                await match.refreshLobby();
             },
 
             // Begin selecting captains - invoked by admin clicking "Start Picking"
@@ -299,28 +383,14 @@ module.exports = {
 
         client.matches.set(matchId, match);
 
-        // Send initial lobby message
+        // Send initial lobby message (kept so the private player picker can edit it later)
         const embed = {
             title: `Match Lobby: ${matchId}`,
             description: "Click below to join.",
             color: 0x00AEFF
         };
 
-        const buttons = new ActionRowBuilder().addComponents(
-            new ButtonBuilder()
-                .setCustomId(`join:${matchId}`)
-                .setLabel("Participate in Match")
-                .setStyle(ButtonStyle.Success),
-            new ButtonBuilder()
-                .setCustomId(`start_picking:${matchId}`)
-                .setLabel("Start Picking")
-                .setStyle(ButtonStyle.Primary),
-            new ButtonBuilder()
-                .setCustomId(`randomize:${matchId}`)
-                .setLabel("Randomize Teams (by Elo)")
-                .setStyle(ButtonStyle.Secondary)
-        );
-
-        await interaction.reply({ embeds: [embed], components: [buttons] });
+        await interaction.reply({ embeds: [embed], components: lobbyComponents(matchId) });
+        try { match.lobbyMessage = await interaction.fetchReply(); } catch (_) {}
     }
 };

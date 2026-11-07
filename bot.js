@@ -67,6 +67,22 @@ client.on("interactionCreate", async (interaction) => {
         return;
     }
 
+    // "Choose Players" member picker in a lobby
+    if (interaction.isUserSelectMenu()) {
+        const [action, matchId] = interaction.customId.split(":");
+        const match = client.matches.get(matchId);
+        if (action === "setplayers") {
+            if (!match) return interaction.reply({ content: "Match no longer exists.", ephemeral: true });
+            try {
+                await match.setPlayers(interaction);
+            } catch (err) {
+                console.error(err);
+                await replyError(interaction, err);
+            }
+        }
+        return;
+    }
+
     // BUTTON INTERACTIONS
     if (interaction.isButton()) {
         const owner = buttonHandlers.get(interaction.customId.split(":")[0]);
@@ -129,6 +145,14 @@ client.on("interactionCreate", async (interaction) => {
 
         if (action === "randomize") {
             await match.randomizeTeams(interaction);
+        }
+
+        if (action === "addvoice") {
+            await match.addVoicePlayers(interaction);
+        }
+
+        if (action === "chooseplayers") {
+            await match.choosePlayers(interaction);
         }
     }
 });
