@@ -22,7 +22,7 @@ Short version: fill in the stats section of `.env` (see `.env.example`), then `d
 
 | Command | |
 |---|---|
-| `/startmatch`, `/connect` | Lobby, captains, draft (or **Randomize Teams**: 2 random captains, Elo-balanced), move to voice; how to join the server |
+| `/startmatch`, `/connect` | Lobby (starter can **Add Everyone in Voice** or **Choose Players**), captains, draft (or **Randomize Teams**: 2 random captains, Elo-balanced), move to voice; how to join the server |
 | `/leaderboard [stat] [period] [min_matches]` | 10 players per page with Prev/Next, plus a button to the full site |
 | `/stats [player] [member]` | Profile: rating, category percentiles, duels, utility, recent matches |
 | `/match [id]` · `/matches` | Scorecard for a match · the last 10 matches |
