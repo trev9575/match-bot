@@ -5,3 +5,31 @@ services:
     container_name: matchbot
     restart: unless-stopped
     env_file: .env
+    environment:
+      STATS_API_URL: http://stats:8080   # the stats container, over Docker's internal network
+    depends_on:
+      - stats
+
+  # CS2 stats: reads MatchZy demos, keeps the database, serves the leaderboard website
+  stats:
+    build: ./stats
+    image: match-bot-stats
+    container_name: matchbot-stats
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DEMO_DIR: /demos
+      DB_PATH: /data/stats.db
+    volumes:
+      # MatchZy's demo folder inside the AMP instance, read-only: nothing here can delete demos
+      - ${MATCHZY_DEMO_DIR:?Set MATCHZY_DEMO_DIR in .env}:/demos:ro
+      # The stats database (a few MB). Back this folder up if you care about the history.
+      - ./stats-data:/data
+    ports:
+      - "${STATS_PORT:-8080}:8080"
+    # Parsing a demo takes a few seconds of CPU; keep it from competing with the game server
+    cpus: "1.0"
+    mem_limit: 1g
+    logging:
+      driver: json-file
+      options: { max-size: "5m", max-file: "2" }

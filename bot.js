@@ -1,6 +1,7 @@
 const { Client, GatewayIntentBits, Collection } = require("discord.js");
 const fs = require("fs");
 const config = require("./config.json");
+const { startMatchFeed } = require("./lib/matchFeed");
 
 const client = new Client({
     intents: [
@@ -22,7 +23,23 @@ for (const file of commandFiles) {
 
 client.on("ready", () => {
     console.log(`Bot logged in as ${client.user.tag}`);
+    startMatchFeed(client);   // posts CS2 scorecards when the stats service finishes a demo
 });
+
+// Commands can own buttons by exporting buttonPrefix + handleButton (e.g. leaderboard paging)
+const buttonHandlers = new Map();
+for (const command of client.commands.values()) {
+    if (command.buttonPrefix) buttonHandlers.set(command.buttonPrefix, command);
+}
+
+// Reply with an error whether or not the interaction was already acknowledged
+async function replyError(interaction, err) {
+    const content = err && err.name === "StatsError" ? err.message : "Error running command";
+    try {
+        if (interaction.deferred || interaction.replied) await interaction.followUp({ content, ephemeral: true });
+        else await interaction.reply({ content, ephemeral: true });
+    } catch (_) {}
+}
 
 // Slash command + button interactions
 client.on("interactionCreate", async (interaction) => {
@@ -33,12 +50,36 @@ client.on("interactionCreate", async (interaction) => {
             await command.execute(interaction, client);
         } catch (err) {
             console.error(err);
-            interaction.reply({ content: "Error running command", ephemeral: true });
+            await replyError(interaction, err);
         }
+    }
+
+    // Autocomplete (e.g. player names in /stats)
+    if (interaction.isAutocomplete()) {
+        const command = client.commands.get(interaction.commandName);
+        if (command && command.autocomplete) {
+            try {
+                await command.autocomplete(interaction);
+            } catch (err) {
+                console.error(err);
+            }
+        }
+        return;
     }
 
     // BUTTON INTERACTIONS
     if (interaction.isButton()) {
+        const owner = buttonHandlers.get(interaction.customId.split(":")[0]);
+        if (owner) {
+            try {
+                await owner.handleButton(interaction, client);
+            } catch (err) {
+                console.error(err);
+                await replyError(interaction, err);
+            }
+            return;
+        }
+
         const [action, matchId] = interaction.customId.split(":");
 
         const match = client.matches.get(matchId);
