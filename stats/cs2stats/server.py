@@ -11,7 +11,6 @@ Public (read-only) endpoints — used by the website:
   GET  /api/matches?limit=20&offset=0
   GET  /api/matches/<id>
   GET  /api/ranks                          rank bands + which custom badge images exist
-  GET  /api/matchconfig/<matchid>.json     match setup for MatchZy (matchzy_loadmatch_url)
 
 Bot-only endpoints — need "Authorization: Bearer $STATS_API_KEY":
   GET  /api/announcements                 matches waiting to be posted to Discord
@@ -21,7 +20,6 @@ Bot-only endpoints — need "Authorization: Bearer $STATS_API_KEY":
   POST /api/unlink   {"discord_id"}
   POST /api/rescan
   POST /api/discord-ratings {"discord_ids": [...]}  -> Elo for linked members (team balancing)
-  POST /api/matchconfig {"team1": {"name", "players": {steamid: name}}, "team2": ..., "map"}
   DELETE /api/matches/<id>
 """
 from __future__ import annotations
@@ -272,27 +270,6 @@ class StatsService:
                              "rank_short": e.get("rank_short", "—"), "placed": e.get("placed", False)}
         return out
 
-    def make_matchzy_config(self, body):
-        """Match setup for MatchZy: our two teams, one map, knife round for sides."""
-        teams = {}
-        for k in ("team1", "team2"):
-            t = body.get(k) or {}
-            players = {str(s): str(n)[:32] for s, n in (t.get("players") or {}).items() if STEAMID.match(str(s))}
-            if not players:
-                raise ValueError(f"{k} has no players with a SteamID64")
-            teams[k] = {"name": re.sub(r"[^\w .-]", "", str(t.get("name") or k))[:32] or k, "players": players}
-        mp = str(body.get("map") or "").strip()
-        if not re.fullmatch(r"[A-Za-z0-9_\-]{2,64}", mp):
-            raise ValueError("bad map name")
-        size = max(len(teams["team1"]["players"]), len(teams["team2"]["players"]))
-        cfg = {"matchid": 0, "team1": teams["team1"], "team2": teams["team2"],
-               "num_maps": 1, "maplist": [mp], "map_sides": ["knife"], "skip_veto": True,
-               "clinch_series": True, "players_per_team": size,
-               "min_players_to_ready": len(teams["team1"]["players"]) + len(teams["team2"]["players"]),
-               "cvars": {}}
-        mid = self.db.save_matchzy_config(cfg)
-        return {"matchid": mid, "path": f"/api/matchconfig/{mid}.json", "config": cfg}
-
 
 # ----------------------------------------------------------------------------- HTTP
 
@@ -357,9 +334,6 @@ class Handler(BaseHTTPRequestHandler):
             if route == ["ranks"]:
                 return self._json({"ranks": elo_mod.ranks_table(), "images": svc.rank_images(),
                                    "placement_matches": elo_mod.PLACEMENT_MATCHES})
-            if len(route) == 2 and route[0] == "matchconfig" and route[1].endswith(".json"):
-                cfg = svc.db.matchzy_config(route[1][:-5])
-                return self._json(cfg) if cfg else self._err(404, "no such match setup")
             if route == ["players"]:
                 return self._json(svc.db.player_names(q.get("q", ""), limit=25))
             if len(route) == 2 and route[0] == "players":
@@ -426,11 +400,7 @@ class Handler(BaseHTTPRequestHandler):
             if route == ["discord-ratings"]:
                 b = self._body() or {}
                 return self._json({"players": svc.discord_ratings(list(b.get("discord_ids") or [])[:40])})
-            if route == ["matchconfig"]:
-                b = self._body()
-                if b is None:
-                    return self._err(400, "bad JSON")
-                return self._json(svc.make_matchzy_config(b))
+
             return self._err(404, "not found")
         except (ValueError, TypeError) as e:
             return self._err(400, str(e) or "bad request")

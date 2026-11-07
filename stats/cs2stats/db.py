@@ -34,10 +34,6 @@ CREATE TABLE IF NOT EXISTS player_match (
   {", ".join(f"{c} REAL" for c in REAL_COLS)},
   PRIMARY KEY (match_id, steamid)
 );
-CREATE TABLE IF NOT EXISTS matchzy_configs (
-  matchid INTEGER PRIMARY KEY,     -- the matchid MatchZy puts in the demo filename
-  created_at TEXT, config TEXT     -- the JSON we served to MatchZy
-);
 CREATE TABLE IF NOT EXISTS skipped_demos (
   source_key TEXT PRIMARY KEY,     -- demo filename that was read and didn't count
   size INTEGER, reason TEXT, at TEXT
@@ -111,7 +107,7 @@ class DB:
             done |= {r[0] for r in c.execute("SELECT source_key FROM skipped_demos")}
         return done
 
-    # ---------- Elo input + MatchZy configs ----------
+    # ---------- Elo input ----------
     def elo_rows(self):
         with self.conn() as c:
             return [dict(r) for r in c.execute(
@@ -123,25 +119,6 @@ class DB:
         with self.conn() as c:
             return tuple(c.execute("SELECT COUNT(*), COALESCE(SUM(id), 0), "
                                    "COALESCE(MAX(imported_at), '') FROM matches").fetchone())
-
-    def save_matchzy_config(self, config: dict) -> int:
-        import json
-        with self.conn() as c:
-            nxt = c.execute("SELECT COALESCE(MAX(matchid), 1000000) + 1 FROM matchzy_configs").fetchone()[0]
-            config["matchid"] = nxt
-            c.execute("INSERT INTO matchzy_configs (matchid, created_at, config) VALUES (?,?,?)",
-                      (nxt, datetime.now().isoformat(timespec="seconds"), json.dumps(config)))
-            return nxt
-
-    def matchzy_config(self, matchid):
-        import json
-        try:
-            mid = int(matchid)
-        except (TypeError, ValueError):
-            return None
-        with self.conn() as c:
-            r = c.execute("SELECT config FROM matchzy_configs WHERE matchid=?", (mid,)).fetchone()
-            return json.loads(r[0]) if r else None
 
     def mark_skipped(self, source_key: str, size: int, reason: str):
         with self.conn() as c:

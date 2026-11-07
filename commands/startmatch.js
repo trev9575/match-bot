@@ -176,11 +176,7 @@ module.exports = {
                         new ButtonBuilder()
                             .setCustomId(`move_players:${matchId}`)
                             .setLabel("Move Players to Voice")
-                            .setStyle(ButtonStyle.Primary),
-                        new ButtonBuilder()
-                            .setCustomId(`sendteams:${matchId}`)
-                            .setLabel("Send Teams to Server")
-                            .setStyle(ButtonStyle.Success)
+                            .setStyle(ButtonStyle.Primary)
                     );
                     rows.push(controlRow);
                 }
@@ -249,17 +245,8 @@ module.exports = {
                 match.turn = null;
 
                 await interaction.channel.send({ embeds: [teams.balanceEmbed(result, interaction.guild)] });
-                await match.showDraftBoard(interaction);   // final board: connect info, move + send buttons
+                await match.showDraftBoard(interaction);   // final board: connect info + move button
                 await match.movePlayers(interaction, client);
-            },
-
-            // "Send Teams to Server": check links, pick a map, load the teams into MatchZy
-            async promptSendTeams(interaction) {
-                return teams.promptSendTeams(interaction, match);
-            },
-
-            async sendTeams(interaction) {
-                return teams.sendTeams(interaction, match);
             },
 
             // Move users into configured voice channels

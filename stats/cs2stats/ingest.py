@@ -34,20 +34,6 @@ def team_names(source_name: str, players) -> tuple:
     return (out["A"], out["B"])
 
 
-def config_team_names(cfg: dict, players) -> tuple:
-    """Team names from a match setup the bot sent to MatchZy. Teams in our data are
-    A/B by starting side (a knife round decides that), so match them by roster."""
-    out = {}
-    for team in ("A", "B"):
-        sids = {p.steamid for p in players.values() if p.team == team}
-        overlap = {k: len(sids & set((cfg.get(k) or {}).get("players") or {})) for k in ("team1", "team2")}
-        best = max(overlap, key=overlap.get)
-        out[team] = (cfg[best].get("name") if overlap[best] else None)
-    if out["A"] and out["A"] == out["B"]:
-        return (None, None)
-    return (out["A"], out["B"])
-
-
 ALLOWED_MODES = {m.strip() for m in os.environ.get("ALLOWED_MODES", "competitive").split(",")}
 WIN_ROUNDS = int(os.environ.get("WIN_ROUNDS", "13"))   # MR12; set 9 for MR8 short matches
 
@@ -95,12 +81,8 @@ def store(db: DB, source_key, matchzy_id, played_at, summary, players, source,
         return None, why
     if matchzy_id and source == "log" and db.has_matchzy(matchzy_id, summary["map"]):
         return None, "already imported from demo"
-    names = team_names(source_key, players)
-    cfg = db.matchzy_config(matchzy_id) if matchzy_id else None
-    if cfg:
-        names = config_team_names(cfg, players)
     mid = db.save_match(source_key, summary, players, matchzy_id=matchzy_id, played_at=played_at,
-                        source=source, team_names=names,
+                        source=source, team_names=team_names(source_key, players),
                         announce=announce)
     return mid, None
 

@@ -67,22 +67,6 @@ client.on("interactionCreate", async (interaction) => {
         return;
     }
 
-    // Map choice after "Send Teams to Server"
-    if (interaction.isStringSelectMenu()) {
-        const [action, matchId] = interaction.customId.split(":");
-        const match = client.matches.get(matchId);
-        if (action === "sendmap") {
-            if (!match) return interaction.reply({ content: "Match no longer exists.", ephemeral: true });
-            try {
-                await match.sendTeams(interaction);
-            } catch (err) {
-                console.error(err);
-                await replyError(interaction, err);
-            }
-        }
-        return;
-    }
-
     // BUTTON INTERACTIONS
     if (interaction.isButton()) {
         const owner = buttonHandlers.get(interaction.customId.split(":")[0]);
@@ -145,10 +129,6 @@ client.on("interactionCreate", async (interaction) => {
 
         if (action === "randomize") {
             await match.randomizeTeams(interaction);
-        }
-
-        if (action === "sendteams") {
-            await match.promptSendTeams(interaction);
         }
     }
 });
