@@ -31,6 +31,10 @@ CREATE TABLE IF NOT EXISTS player_match (
   {", ".join(f"{c} REAL" for c in REAL_COLS)},
   PRIMARY KEY (match_id, steamid)
 );
+CREATE TABLE IF NOT EXISTS skipped_demos (
+  source_key TEXT PRIMARY KEY,     -- demo filename that was read and didn't count
+  size INTEGER, reason TEXT, at TEXT
+);
 CREATE TABLE IF NOT EXISTS players (
   steamid TEXT PRIMARY KEY, name TEXT, discord_id TEXT UNIQUE
 );
@@ -94,6 +98,22 @@ class DB:
         with self.conn() as c:
             return c.execute("SELECT 1 FROM matches WHERE source_key=? AND source='demo'",
                              (source_key,)).fetchone() is not None
+
+    def demo_keys(self) -> set:
+        """Demos already handled: imported from the demo itself, or read and skipped."""
+        with self.conn() as c:
+            done = {r[0] for r in c.execute("SELECT source_key FROM matches WHERE source='demo'")}
+            done |= {r[0] for r in c.execute("SELECT source_key FROM skipped_demos")}
+        return done
+
+    def mark_skipped(self, source_key: str, size: int, reason: str):
+        with self.conn() as c:
+            c.execute("INSERT OR REPLACE INTO skipped_demos (source_key, size, reason, at) VALUES (?,?,?,?)",
+                      (source_key, size, reason, datetime.now().isoformat(timespec="seconds")))
+
+    def clear_skipped(self):
+        with self.conn() as c:
+            c.execute("DELETE FROM skipped_demos")
 
     def drop_log_version(self, source_key: str):
         with self.conn() as c:

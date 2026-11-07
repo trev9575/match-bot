@@ -152,13 +152,15 @@ class StatsService:
     def rescan(self) -> int:
         async def go():
             self.watcher.skipped.clear()
+            self.db.clear_skipped()                    # admin asked: give skipped demos another look
+            self.watcher.done = None
             new = 0
             for path in self.watcher._candidates():
                 name = os.path.basename(path)
                 if time.time() - os.path.getmtime(path) < self.watcher.stable:
                     continue                                   # still being recorded
                 if not self.db.has_demo(name):
-                    mid, _ = await self.watcher.process(path, announce=True)
+                    mid, _ = await self.watcher.process(path, announce=False)
                     new += bool(mid)
             return new
         return asyncio.run_coroutine_threadsafe(go(), self.loop).result(timeout=600)

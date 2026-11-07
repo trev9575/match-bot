@@ -29,6 +29,7 @@ def test_watcher_imports_finished_demo_and_skips_growing(tmp_path, monkeypatch):
     db = DB(str(tmp_path / "s.db"))
     w = ingest.DemoWatcher(db, str(tmp_path), on_new, poll=0.05, stable_seconds=0.3)
     w.pool = ThreadPoolExecutor(1)
+    w.pause = 0
 
     async def go():
         task = asyncio.create_task(w.run())
@@ -74,7 +75,35 @@ def test_demo_replaces_log_backfill(tmp_path, monkeypatch):
     async def on_new(mid): announced.append(mid)
     w = ingest.DemoWatcher(db, str(tmp_path), on_new)
     w.pool = ThreadPoolExecutor(1)
+    w.pause = 0
     (tmp_path / "m.dem").write_bytes(b"x")
     mid, why = asyncio.run(w.process(str(tmp_path / "m.dem")))
     assert mid and why is None and db.has_demo("m.dem") and announced == []
     assert len(db.recent_matches()) == 1
+
+
+def test_skipped_demo_not_reread_after_restart(tmp_path, monkeypatch):
+    calls = []
+
+    def short_demo(path):
+        calls.append(path)
+        src, mz, played, s, P = fake_analyze(path)
+        s["rounds"] = 5                                  # too short -> skipped
+        return src, mz, played, s, P
+    monkeypatch.setattr(ingest, "analyze_demo", short_demo)
+    d = tmp_path / "short.dem"; d.write_bytes(b"x")
+    os.utime(d, (time.time() - 600, time.time() - 600))
+    db = DB(str(tmp_path / "s.db"))
+
+    async def nothing(mid): pass
+
+    async def run_once():
+        w = ingest.DemoWatcher(db, str(tmp_path), nothing, poll=0.05, stable_seconds=0.3)
+        w.pool = ThreadPoolExecutor(1)
+        w.pause = 0
+        task = asyncio.create_task(w.run())
+        await asyncio.sleep(0.3)
+        task.cancel()
+    asyncio.run(run_once())
+    asyncio.run(run_once())                               # "restart"
+    assert len(calls) == 1 and "short.dem" in db.demo_keys()
