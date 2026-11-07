@@ -109,10 +109,11 @@ class DB:
 
     # ---------- Elo input ----------
     def elo_rows(self):
+        """One row per player per match, with that map's Rating 3.0 (None for old log imports)."""
         with self.conn() as c:
-            return [dict(r) for r in c.execute(
-                "SELECT pm.match_id, m.played_at, pm.steamid, pm.team, pm.result FROM player_match pm "
-                "JOIN matches m ON m.id = pm.match_id")]
+            rows = [dict(r) for r in c.execute(
+                "SELECT pm.*, m.played_at FROM player_match pm JOIN matches m ON m.id = pm.match_id")]
+        return self._rate(rows)
 
     def version(self):
         """Changes whenever matches are added or removed (cache key)."""
@@ -203,7 +204,8 @@ class DB:
                 return None, []
             ps = c.execute("SELECT * FROM player_match WHERE match_id=?", (m["id"],)).fetchall()
         players = self._rate([dict(p) for p in ps])
-        return dict(m), sorted(players, key=lambda p: -p["rating"])
+        # best rating first; games without Rating 3.0 data (old log imports) fall back to kills
+        return dict(m), sorted(players, key=lambda p: (p["rating"] is None, -(p["rating"] or 0), -p["kills"]))
 
     def recent_matches(self, limit=10, offset=0):
         with self.conn() as c:

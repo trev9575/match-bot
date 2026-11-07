@@ -169,13 +169,16 @@ function badgeTone(hex) {
   return r > 150 && g < 90 && b < 90 ? "red" : "";
 }
 function badge(r) {
-  if (!r || r.elo == null) return `<span class="rk-badge none" title="No matches yet">—</span>`;
+  if (!r || (r.elo == null && r.elo_sort == null)) return `<span class="rk-badge none" title="No matches yet">—</span>`;
   if (!r.rank) return `<span class="rk-badge none" title="${esc(r.rank_name)}">${r.placed ? "EXP" : "?"}</span>`;
   const img = RANK_IMAGES[r.rank];
   if (img) return `<img src="${esc(img)}" alt="${esc(r.rank_name)}" title="${esc(r.rank_name)}">`;
   return `<span class="rk-badge ${badgeTone(r.rank_color)}" style="--c:${esc(r.rank_color)}" title="${esc(r.rank_name)}">${esc(r.rank_short)}</span>`;
 }
-const rankCell = (r) => (r.elo == null ? "–" : `<span class="rk">${badge(r)}<span class="elo ${r.rank ? "" : "prov"}" title="${r.rank ? esc(r.rank_name) : "Provisional until placed"}">${r.elo}</span></span>`);
+// Elo is hidden until placement matches are done (like CS:GO): show "?" instead of the number
+const eloText = (r) => (r.elo != null ? String(r.elo) : r.elo_sort != null ? "?" : "–");
+const rankCell = (r) => (r.elo == null && r.elo_sort == null ? "–" :
+  `<span class="rk">${badge(r)}<span class="elo ${r.elo != null && r.rank ? "" : "prov"}" title="${esc(r.rank_name || "")}">${eloText(r)}</span></span>`);
 const delta = (d) => (d == null ? "–" : `<span class="delta ${d > 0 ? "up" : d < 0 ? "down" : ""}">${d > 0 ? "+" : ""}${d}</span>`);
 
 // ---------------------------------------------------------------- sortable tables
@@ -212,12 +215,13 @@ table.onSort = {};
 // ---------------------------------------------------------------- leaderboard page
 const LB = {view: "overview", q: "", min2: false, period: "all", map: ""};
 const NAME_COL = {k: "name", label: "Player", left: true, stick: true, fmt: (r) => `<span class="pname">${pLink(r.steamid, r.name)}</span>`, sort: (r) => r.name.toLowerCase()};
-const RANK_COL = {k: "elo", label: "Rank · Elo", left: true, fmt: rankCell, sort: (r) => (r.rank ? 100000 : 0) + num(r.elo), title: "CS:GO-style rank from win/loss Elo (Glicko-2)"};
+const RANK_COL = {k: "elo", label: "Rank · Elo", left: true, fmt: rankCell, sort: (r) => (r.placed ? 100000 : 0) + num(r.elo_sort), title: "CS:GO-style rank: Elo from wins and losses, adjusted a little by how you played. Hidden until placement matches are done."};
+const POS_COL = {k: "position", label: "#", fmt: (r) => r.position, sort: (r) => -num(r.position)};
 const RATING_COL = {k: "rating", label: "Rating 3.0", fmt: (r) => rt(r.rating), cls: "b", sort: (r) => (r.rating == null ? -9 : r.rating)};
 const VIEWS = {
-  overview: {label: "Overview", cols: [NAME_COL,
+  overview: {label: "Overview", cols: [POS_COL, NAME_COL,
     RANK_COL, {k: "matches", label: "M"}, {k: "wins", label: "W"}, {k: "losses", label: "L"},
-    RATING_COL,
+    {...RATING_COL, label: "Avg rating"},
     {k: "swing_pr", label: "Swing", fmt: (r) => swingTxt(r.swing_pr), cls: (r) => swingCls(r.swing_pr), sort: (r) => (r.swing_pr == null ? -999 : r.swing_pr), title: "Average change in your team's round-win chance per round"},
     {k: "kills", label: "K"}, {k: "deaths", label: "D"}, {k: "assists", label: "A"},
     {k: "kd", label: "K/D", fmt: (r) => f2(r.kd)}, {k: "adr", label: "ADR", fmt: (r) => f1(r.adr)},
@@ -248,7 +252,7 @@ async function pageHome() {
   $app.innerHTML = `
     <div class="top"><div>
       <h1 class="brand">CS2 5v5 Leaderboard</h1>
-      <p class="take">${leader ? `<b>${esc(leader.name)}</b> leads the group with a <b>${f2(leader.rating)}</b> Rating 3.0. ` : ""}${sum.top_elo ? `<b>${esc(sum.top_elo.name)}</b> has the highest rank: ${esc(sum.top_elo.rank_name)} (${sum.top_elo.elo} Elo). ` : ""}Ratings are relative to this group: 1.00 is the average player in our games.</p>
+      <p class="take">${sum.top_elo ? `<b>${esc(sum.top_elo.name)}</b> is #1: ${esc(sum.top_elo.rank_name)}, ${sum.top_elo.elo} Elo. ` : `Nobody has finished ${PLACEMENTS} placement matches yet. `}${leader ? `Best average rating: <b>${esc(leader.name)}</b> (${f2(leader.rating)}). ` : ""}Ratings are relative to this group: 1.00 is the average player in our games.</p>
     </div></div>
     <div class="tiles">
       <div class="card"><div class="tile-label">Matches</div><div class="tile-num">${sum.matches}</div><div class="tile-sub">${sum.first_played ? "Competitive maps since " + fmtDate(sum.first_played) : "No matches yet"}</div></div>
@@ -259,7 +263,7 @@ async function pageHome() {
     </div>
     <section class="card">
       <h2>Leaderboard</h2>
-      <p class="note">Click a player for their profile and match history. Click a column to sort. Faded rows have fewer than ${minM} matches.</p>
+      <p class="note">Ranked by Elo. Players still in their ${PLACEMENTS} placement matches show <b>?</b> and are listed after ranked players. Click a player for their profile, or a column to sort. Faded rows have fewer than ${minM} matches.</p>
       <div class="controls">
         <div class="tabs" role="tablist">${Object.entries(VIEWS).map(([k, v]) => `<button class="tab" role="tab" data-view="${k}" aria-selected="${LB.view === k}">${v.label}</button>`).join("")}</div>
         <input type="search" id="q" placeholder="Search players" value="${esc(LB.q)}" aria-label="Search players">
@@ -289,7 +293,7 @@ async function pageHome() {
     const v = VIEWS[LB.view];
     table.onSort.lb = drawTable;
     document.getElementById("lbtable").innerHTML = table("lb", v.cols, filtered(),
-      {sortKey: "rating", rowCls: (r) => (r.matches < minM ? "few click" : ""), href: (r) => "/player/" + r.steamid});
+      {sortKey: "elo", rowCls: (r) => (r.matches < minM ? "few click" : ""), href: (r) => "/player/" + r.steamid});
   };
   drawTable();
   $app.querySelectorAll(".tab[data-view]").forEach((b) => b.addEventListener("click", () => {
@@ -372,7 +376,7 @@ function explainer() {
   return `<details class="card"><summary>How the stats work</summary><dl>
     <dt>Rating 3.0</dt><dd>Our approximation of HLTV Rating 3.0: Swing 33%, Kills 25%, Survival 14%, KAST 12%, Damage 11%, Multi-kills 5%. Kills, deaths and damage are eco-adjusted, so a rifle killing a pistol counts less. 1.00 is the average player in our games.</dd>
     <dt>Round swing</dt><dd>How much your actions changed your team's chance of winning the round, averaged per round. Kills after the round is decided don't count.</dd>
-    <dt>Rank &amp; Elo</dt><dd>Works like CS:GO matchmaking, which Valve built on Glicko-2: only wins and losses move it, it moves more while your rating is still uncertain (new or returning players), and that uncertainty grows again when you don't play. Everyone starts at 1500 (Gold Nova III). Your rank shows after ${PLACEMENTS} placement matches and is hidden again after a month without playing. The rank bands are our own spacing; Valve never published theirs.</dd>
+    <dt>Rank &amp; Elo</dt><dd>Works like CS:GO matchmaking, which Valve built on Glicko-2: winning and losing move it, it moves more while your rating is still uncertain (new or returning players), and that uncertainty grows again when you don't play. On top of that, how you played counts a little: your Rating 3.0 in the match makes a win worth up to 30% more or less, and a loss cost up to 30% less or more. Everyone starts at 1500 (Gold Nova III). Your rank and Elo stay hidden until ${PLACEMENTS} placement matches, and the rank is hidden again after a month without playing. The rank bands are our own spacing; Valve never published theirs.</dd>
     <dt>ADR</dt><dd>Damage to enemies per round, capped at their remaining HP.</dd>
     <dt>KAST</dt><dd>% of rounds with a kill, assist, survival, or a death your team traded.</dd>
     <dt>Opening duel</dt><dd>The first kill of a round. It counts for both the killer and the player who died.</dd>
@@ -402,10 +406,10 @@ async function pagePlayer(sid) {
     <div class="crumb"><a data-nav href="/">← Leaderboard</a></div>
     <section class="card hero">
       <div><h1>${esc(p.name)}</h1>
-        <div class="meta">${p.position ? `#${p.position} of ${d.group_size} by rating · ` : ""}${p.matches} matches · ${p.wins}W–${p.losses}L (${pct(100 * p.wins / Math.max(p.matches, 1))}) · ${p.rounds} rounds
+        <div class="meta">${p.position ? `#${p.position} of ${d.group_size} on the leaderboard · ` : ""}${p.matches} matches · ${p.wins}W–${p.losses}L (${pct(100 * p.wins / Math.max(p.matches, 1))}) · ${p.rounds} rounds
         · <a href="https://steamcommunity.com/profiles/${esc(p.steamid)}" target="_blank" rel="noopener">Steam profile ↗</a></div></div>
-      <div class="big-rating"><div class="n">${rt(p.rating)}</div><div class="l">Rating 3.0</div>
-        <div class="big-rank">${badge(p)}<span><b>${p.elo ?? "–"}</b> Elo<br><span class="tile-sub">${esc(p.rank_name || "")}</span></span></div></div>
+      <div class="big-rating"><div class="n">${rt(p.rating)}</div><div class="l">Avg rating (Rating 3.0)</div>
+        <div class="big-rank">${badge(p)}<span>${p.elo != null ? `<b>${p.elo}</b> Elo` : `Elo hidden until placed`}<br><span class="tile-sub">${esc(p.rank_name || "")}</span></span></div></div>
     </section>
     <div class="tiles">${tiles.map(([l, n, s]) => `<div class="card"><div class="tile-label">${l}</div><div class="tile-num">${n}</div><div class="tile-sub">${s}</div></div>`).join("")}</div>
     <div class="grid2">
@@ -416,7 +420,7 @@ async function pagePlayer(sid) {
           `<div class="bars">${subs.map((k) => { const v = num(p["sub_" + k]); return `<div class="bar-row"><span>${subLabel[k]}</span><div class="bar-track"><div class="bar-fill" style="width:${Math.min(100, (v / 2) * 100)}%;background:${v >= 1 ? "var(--r3)" : "var(--faint)"}"></div></div><span class="bar-val">${f2(v)}</span></div>`; }).join("")}</div>`}</section>
     </div>
     <div class="grid2">
-      <section class="card"><h2>Elo over time</h2><p class="note">After each match, oldest on the left. Green dots are wins.</p>${trend(h, "elo_after")}</section>
+      <section class="card"><h2>Elo over time</h2><p class="note">After each match, oldest on the left. Green dots are wins.</p>${p.placed ? trend(h, "elo_after") : `<div class="empty">Shows after ${PLACEMENTS} placement matches (${p.elo_matches || 0}/${PLACEMENTS} played).</div>`}</section>
       <section class="card"><h2>Rating 3.0 over time</h2><p class="note">Each dot is one match; the dashed line is the group average.</p>${trend(h, "rating")}</section>
     </div>
     <section class="card"><h2>Matches</h2><p class="note">Click a match for the full scorecard.</p><div class="scroll" id="hist"></div></section>
@@ -531,7 +535,7 @@ async function pageMatch(id) {
   const rounds = log ? [...log].map((c, i) => `<div class="rd ${c === "-" ? "x" : c.toUpperCase()} ${i === half ? "half" : ""}" title="Round ${i + 1}: ${c === "-" ? "?" : (c.toUpperCase() === "A" ? ta : tb) + (c === c.toLowerCase() && c !== "-" ? " (T side)" : " (CT side)")}">${i + 1}</div>`).join("") : "";
   const cols = [
     {k: "name", label: "Player", left: true, stick: true, fmt: (r) => `<span class="pname">${pLink(r.steamid, r.name)}</span>`, sort: (r) => r.name.toLowerCase()},
-    {k: "elo", label: "Rank", left: true, fmt: (r) => `<span class="rk">${badge(r)}</span>`, sort: (r) => num(r.elo)},
+    {k: "elo", label: "Rank", left: true, fmt: (r) => `<span class="rk">${badge(r)}</span>`, sort: (r) => (r.placed ? 100000 : 0) + num(r.elo_sort)},
     {k: "kills", label: "K"}, {k: "deaths", label: "D"}, {k: "assists", label: "A"},
     {k: "pm", label: "+/−", fmt: (r) => { const v = r.kills - r.deaths; return `<span class="${v > 0 ? "good" : v < 0 ? "bad" : ""}">${v > 0 ? "+" : ""}${v}</span>`; }, sort: (r) => r.kills - r.deaths},
     {k: "adr", label: "ADR", fmt: (r) => f0(r.damage / Math.max(r.rounds, 1)), sort: (r) => r.damage},

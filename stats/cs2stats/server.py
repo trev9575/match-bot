@@ -177,12 +177,21 @@ class StatsService:
             return self._elo[1], self._elo[2]
 
     def _with_elo(self, rows, match_id=None):
+        """Add rank + Elo. Until a player finishes placement their Elo is hidden (None), the way
+        CS:GO hid ranks; it's kept as elo_sort so lists can still be ordered by it."""
         players, per_match = self.elo()
         for r in rows:
-            r.update(players.get(r["steamid"], {}))
+            info = dict(players.get(r["steamid"], {}))
+            placed = info.get("placed", False)
+            if info:
+                info["elo_sort"] = info["elo"]
+                if not placed:
+                    info["elo"] = None
+            r.update(info)
             mid = match_id or r.get("match_id")
             if mid is not None:
-                r.update(per_match.get((mid, r["steamid"]), {}))
+                pm = per_match.get((mid, r["steamid"]), {})
+                r.update(pm if placed else {k: None for k in pm})
         return rows
 
     async def _on_new(self, match_id):
@@ -213,7 +222,10 @@ class StatsService:
     # ---- read models ----
     def leaderboard(self, period=None, map_name=None):
         rows = self._with_elo(with_categories(self.db.aggregates(since=_since(period), map_name=map_name)))
-        rows.sort(key=lambda r: (r["rating"] is None, -(r["rating"] or 0)))   # unrated last
+        # ranked by Elo: placed players first, then players still in placement (by their hidden Elo)
+        rows.sort(key=lambda r: (not r.get("placed"), -(r.get("elo_sort") or 0)))
+        for i, r in enumerate(rows, 1):
+            r["position"] = i
         return rows
 
     def summary(self):
@@ -245,8 +257,6 @@ class StatsService:
         agg = next((r for r in rows if r["steamid"] == steamid), None)
         if not agg:
             return None
-        agg["position"] = (1 + sum(1 for r in rows if r["rating"] is not None and r["rating"] > agg["rating"]
-                                   and r["matches"] >= self.min_matches)) if agg["rating"] is not None else None
         history = self._with_elo(self.db.player_history(steamid, limit=500))
         by_map = []
         for m in sorted({h["map"] for h in history}):

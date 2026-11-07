@@ -39,3 +39,17 @@ def test_tie_keeps_equal_teams_level_and_rank_bands():
     assert per[(1, "x")]["elo_delta"] == 0
     assert elo.rank_for(1500)["rank_short"] == "GN3" and elo.rank_for(800)["rank"] == 1
     assert elo.rank_for(2500)["rank_name"] == "The Global Elite"
+
+
+def test_win_contribution_scales_elo_change():
+    A, B = ["a1", "a2"], ["b1", "b2"]
+    rows = rows_for([("2026-11-01T20:00:00", A, B, "A")])
+    perf = {"a1": 1.6, "a2": 0.5, "b1": 1.5, "b2": 0.4}
+    for r in rows:
+        r["rating"] = perf[r["steamid"]]
+    _, per = elo.compute(rows)
+    d = {s: per[(1, s)]["elo_delta"] for s in perf}
+    assert d["a1"] > d["a2"] > 0                 # both win; the carry gains more
+    assert d["b2"] < d["b1"] < 0                 # both lose; the weak game costs more
+    assert d["a1"] / d["a2"] < 1.3 / 0.7 + 0.01  # capped: at most +/-30%
+    assert elo.contribution(None, 1.0) == 1.0 and elo.contribution(3.0, 1.0) == 1.3

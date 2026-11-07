@@ -36,7 +36,8 @@ Short version: fill in the stats section of `.env` (see `.env.example`), then `d
 - **Rating 3.0**: approximation of HLTV Rating 3.0 (Swing 33%, Kills 25%, Survival 14%, KAST 12%,
   Damage 11%, Multi-kill 5%), eco-adjusted. 1.00 = the average player in our games.
 - **Rank & Elo**: CS:GO-style. Glicko-2 on wins/losses (what Valve said CS:GO used), replayed from the match
-  history; 1500 start = Gold Nova III, 18 ranks, 5 placement matches, rank hidden after 30 days idle.
+  history, with each player's match Rating 3.0 scaling their change by up to ±30%; 1500 start = Gold Nova III,
+  18 ranks, rank and Elo hidden until 5 placement matches, rank hidden after 30 days idle. Leaderboards rank by Elo.
   Our own rank bands and badges; drop `1.png`…`18.png` in the stats data folder's `ranks/` to use your own images.
 - **Playstyles chart**: each player placed around a circle of the five profile categories; middle = most
   typical profile, edge = most extreme.
