@@ -16,7 +16,8 @@ Bot-only endpoints — need "Authorization: Bearer $STATS_API_KEY":
   GET  /api/announcements                 matches waiting to be posted to Discord
   POST /api/announcements/<id>/done
   GET  /api/discord/<discord_id>          -> linked steamid
-  POST /api/link     {"discord_id", "steamid"}
+  POST /api/link     {"discord_id", "steamid", "force"}   force = admin taking over an existing link
+  GET  /api/links                         every player with match count + linked Discord id
   POST /api/unlink   {"discord_id"}
   POST /api/rescan
   POST /api/discord-ratings {"discord_ids": [...]}  -> Elo for linked members (team balancing)
@@ -351,7 +352,7 @@ class Handler(BaseHTTPRequestHandler):
                 data = svc.match(mid)
                 return self._json(data) if data else self._err(404, "no such match")
             # ---- bot-only ----
-            if route[:1] in (["announcements"], ["discord"]) and not self._authed():
+            if route[:1] in (["announcements"], ["discord"], ["links"]) and not self._authed():
                 return self._err(401, "missing or wrong STATS_API_KEY")
             if route == ["announcements"]:
                 links = svc.db.discord_links()
@@ -363,6 +364,8 @@ class Handler(BaseHTTPRequestHandler):
                                            for p in data["players"] if p["steamid"] in links}
                         out.append(data)
                 return self._json({"matches": out})
+            if route == ["links"]:
+                return self._json({"players": svc.db.players_with_links()})
             if len(route) == 2 and route[0] == "discord":
                 return self._json({"steamid": svc.db.steamid_for_discord(route[1])})
             return self._err(404, "not found")
@@ -388,9 +391,15 @@ class Handler(BaseHTTPRequestHandler):
                 sid, did = str(b.get("steamid", "")), str(b.get("discord_id", ""))
                 if not STEAMID.match(sid) or not did.isdigit():
                     return self._err(400, "need discord_id and a SteamID64")
+                owner = (svc.db.player(sid) or {}).get("discord_id")
+                if owner and owner != did and not b.get("force"):   # don't let someone take over another player
+                    return self._json({"error": "already linked", "discord_id": owner}, 409)
+                previous = svc.db.steamid_for_discord(did)
                 svc.db.link(did, sid)
                 known = svc.db.player(sid) or {}
-                return self._json({"ok": True, "steamid": sid, "name": known.get("name")})
+                return self._json({"ok": True, "steamid": sid, "name": known.get("name"),
+                                   "replaced_discord_id": owner if owner and owner != did else None,
+                                   "previous_steamid": previous if previous and previous != sid else None})
             if route == ["unlink"]:
                 b = self._body() or {}
                 svc.db.unlink(str(b.get("discord_id", "")))
@@ -428,6 +437,8 @@ class Handler(BaseHTTPRequestHandler):
                                       cache="public, max-age=3600")
             return self._err(404, "no such image")
         name = path.lstrip("/")
+        if name.rstrip("/") == "join":                 # one-click "Join server" page linked from Discord
+            name = "join.html"
         file = os.path.normpath(os.path.join(WEB_DIR, name)) if name else ""
         if name and file.startswith(WEB_DIR + os.sep) and os.path.isfile(file):
             ctype = mimetypes.guess_type(file)[0] or "application/octet-stream"

@@ -228,6 +228,15 @@ class DB:
             return {r["steamid"]: r["discord_id"] for r in
                     c.execute("SELECT steamid, discord_id FROM players WHERE discord_id IS NOT NULL")}
 
+    def players_with_links(self):
+        """Everyone who has played, most matches first, with their linked Discord id (or None)."""
+        with self.conn() as c:
+            return [dict(r) for r in c.execute(
+                "SELECT p.steamid, p.name, p.discord_id, COUNT(pm.match_id) AS matches, MAX(m.played_at) AS last_played "
+                "FROM players p LEFT JOIN player_match pm ON pm.steamid = p.steamid "
+                "LEFT JOIN matches m ON m.id = pm.match_id GROUP BY p.steamid "
+                "HAVING matches > 0 OR p.discord_id IS NOT NULL ORDER BY matches DESC, p.name")]
+
     def unlink(self, discord_id: str):
         with self.conn() as c:
             c.execute("UPDATE players SET discord_id=NULL WHERE discord_id=?", (discord_id,))

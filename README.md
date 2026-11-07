@@ -26,7 +26,9 @@ Short version: fill in the stats section of `.env` (see `.env.example`), then `d
 | `/leaderboard [stat] [period] [min_matches]` | 10 players per page with Prev/Next, plus a button to the full site |
 | `/stats [player] [member]` | Profile: rating, category percentiles, duels, utility, recent matches |
 | `/match [id]` · `/matches` | Scorecard for a match · the last 10 matches |
-| `/link <steam>` · `/unlink` | Connect your Discord to your Steam account (MVP gets tagged in scorecards) |
+| `/link [player] [steam]` · `/unlink` | Pick your in-game name (or paste a Steam link) to connect your Discord; MVP gets tagged in scorecards |
+| `/connect` | One **Join Server** button → the stats site's `/join` page (starts CS2 if needed, then connects) |
+| `/links [show]` · `/link member:@x` · `/unlink member:@x` | Admin (Manage Server): see who's linked, and link/unlink anyone |
 | `/deletematch <id>` · `/rescan` | Admin (Manage Server): remove a bad game · check for demos now |
 
 ## Stats
