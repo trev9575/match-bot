@@ -5,7 +5,7 @@ import sqlite3
 from contextlib import contextmanager
 from datetime import datetime
 
-from .stats import PlayerMatch, rating2
+from .stats import PlayerMatch
 from . import rating3 as r3
 
 INT_COLS = ["rounds", "rounds_won", "kills", "deaths", "assists", "hs_kills", "damage",
@@ -13,6 +13,9 @@ INT_COLS = ["rounds", "rounds_won", "kills", "deaths", "assists", "hs_kills", "d
             "traded_deaths", "clutch_attempts", "clutch_wins", "k2", "k3", "k4", "k5", "aces",
             "enemies_flashed", "team_flashed", "flash_assists", "teamkills", "saved_lost"]
 REAL_COLS = ["blind_time", "rating", "e_kills", "e_deaths", "e_damage", "swing", "mk_points"]
+# Rating 3.0 inputs, and how to tell a row has them (rows from before 3.0 are all zero)
+R3_COLS = ["rounds", "kast_rounds", "saved_lost", "e_kills", "e_deaths", "e_damage", "swing", "mk_points"]
+HAS_R3 = "(pm.e_kills > 0 OR pm.e_deaths > 0 OR pm.swing != 0)"
 
 SCHEMA = f"""
 CREATE TABLE IF NOT EXISTS matches (
@@ -30,6 +33,10 @@ CREATE TABLE IF NOT EXISTS player_match (
   {", ".join(f"{c} INTEGER" for c in INT_COLS)},
   {", ".join(f"{c} REAL" for c in REAL_COLS)},
   PRIMARY KEY (match_id, steamid)
+);
+CREATE TABLE IF NOT EXISTS skipped_demos (
+  source_key TEXT PRIMARY KEY,     -- demo filename that was read and didn't count
+  size INTEGER, reason TEXT, at TEXT
 );
 CREATE TABLE IF NOT EXISTS players (
   steamid TEXT PRIMARY KEY, name TEXT, discord_id TEXT UNIQUE
@@ -63,15 +70,13 @@ class DB:
             return r3.baseline([dict(r) for r in c.execute("SELECT * FROM player_match")])
 
     def _rate(self, rows, base=None):
+        """Rating 3.0 per player-map. None for games imported before 3.0 data existed."""
         base = self.baseline() if base is None else base
         for r in rows:
-            r["rating2"] = r.get("rating")
-            r["rating"], subs = r3.rating3(r, base)
-            r["rating_kind"] = "3.0" if r["rating"] is not None else "2.0"
-            if r["rating"] is None:
-                r["rating"] = r["rating2"]
+            r["rating"], subs = r3.rating3(r, base)          # stored 2.0 value is ignored
             r.update({f"sub_{k}": v for k, v in subs.items()})
-            r["swing_pr"] = 100 * (r.get("swing") or 0) / max(r.get("rounds") or 1, 1)
+            r["swing_pr"] = (100 * (r.get("swing") or 0) / max(r.get("rounds") or 1, 1)
+                             if r["rating"] is not None else None)
         return rows
 
     @contextmanager
@@ -94,6 +99,35 @@ class DB:
         with self.conn() as c:
             return c.execute("SELECT 1 FROM matches WHERE source_key=? AND source='demo'",
                              (source_key,)).fetchone() is not None
+
+    def demo_keys(self) -> set:
+        """Demos already handled: imported from the demo itself, or read and skipped."""
+        with self.conn() as c:
+            done = {r[0] for r in c.execute("SELECT source_key FROM matches WHERE source='demo'")}
+            done |= {r[0] for r in c.execute("SELECT source_key FROM skipped_demos")}
+        return done
+
+    # ---------- Elo input ----------
+    def elo_rows(self):
+        with self.conn() as c:
+            return [dict(r) for r in c.execute(
+                "SELECT pm.match_id, m.played_at, pm.steamid, pm.team, pm.result FROM player_match pm "
+                "JOIN matches m ON m.id = pm.match_id")]
+
+    def version(self):
+        """Changes whenever matches are added or removed (cache key)."""
+        with self.conn() as c:
+            return tuple(c.execute("SELECT COUNT(*), COALESCE(SUM(id), 0), "
+                                   "COALESCE(MAX(imported_at), '') FROM matches").fetchone())
+
+    def mark_skipped(self, source_key: str, size: int, reason: str):
+        with self.conn() as c:
+            c.execute("INSERT OR REPLACE INTO skipped_demos (source_key, size, reason, at) VALUES (?,?,?,?)",
+                      (source_key, size, reason, datetime.now().isoformat(timespec="seconds")))
+
+    def clear_skipped(self):
+        with self.conn() as c:
+            c.execute("DELETE FROM skipped_demos")
 
     def drop_log_version(self, source_key: str):
         with self.conn() as c:
@@ -194,6 +228,15 @@ class DB:
             return {r["steamid"]: r["discord_id"] for r in
                     c.execute("SELECT steamid, discord_id FROM players WHERE discord_id IS NOT NULL")}
 
+    def players_with_links(self):
+        """Everyone who has played, most matches first, with their linked Discord id (or None)."""
+        with self.conn() as c:
+            return [dict(r) for r in c.execute(
+                "SELECT p.steamid, p.name, p.discord_id, COUNT(pm.match_id) AS matches, MAX(m.played_at) AS last_played "
+                "FROM players p LEFT JOIN player_match pm ON pm.steamid = p.steamid "
+                "LEFT JOIN matches m ON m.id = pm.match_id GROUP BY p.steamid "
+                "HAVING matches > 0 OR p.discord_id IS NOT NULL ORDER BY matches DESC, p.name")]
+
     def unlink(self, discord_id: str):
         with self.conn() as c:
             c.execute("UPDATE players SET discord_id=NULL WHERE discord_id=?", (discord_id,))
@@ -220,10 +263,11 @@ class DB:
             where.append("m.map = ?"); args.append(map_name)
         w = ("WHERE " + " AND ".join(where)) if where else ""
         sums = ", ".join(f"SUM(pm.{c}) AS {c}" for c in INT_COLS + [c for c in REAL_COLS if c != "rating"])
+        # Rating 3.0 only counts games that have its inputs (older log imports don't)
+        r3_sums = ", ".join(f"SUM(CASE WHEN {HAS_R3} THEN pm.{c} ELSE 0 END) AS r3_{c}" for c in R3_COLS)
         sql = (f"SELECT pm.steamid, p.name, COUNT(*) AS matches, "
                f"SUM(pm.result='W') AS wins, SUM(pm.result='L') AS losses, "
-               f"AVG(pm.rating) AS avg_match_rating, {sums}, "
-               f"MIN(pm.e_kills > 0 OR pm.e_deaths > 0 OR pm.swing != 0) AS r3_complete "
+               f"SUM(pm.result='T') AS ties, MAX(m.played_at) AS last_played, {sums}, {r3_sums} "
                f"FROM player_match pm JOIN matches m ON m.id=pm.match_id "
                f"JOIN players p ON p.steamid=pm.steamid {w} GROUP BY pm.steamid")
         with self.conn() as c:
@@ -231,11 +275,10 @@ class DB:
         base = self.baseline()
         rows = [derive(r) for r in rows]
         for r in rows:
-            r["rating2"] = r["rating"]
-            r3v, subs = r3.rating3(r, base)
-            r["rating_kind"] = "3.0" if r3v is not None else "2.0"
-            if r3v is not None:
-                r["rating"] = r3v
+            r3row = {c: r.pop(f"r3_{c}") or 0 for c in R3_COLS}
+            r["rating"], subs = r3.rating3(r3row, base) if r3row["rounds"] else (None, {})
+            r["rating_rounds"] = r3row["rounds"]              # rounds the rating is based on
+            r["swing_pr"] = (100 * r3row["swing"] / r3row["rounds"]) if r["rating"] is not None else None
             r.update({f"sub_{k}": v for k, v in subs.items()})
         return rows
 
@@ -250,7 +293,6 @@ def derive(r: dict) -> dict:
     r["kast"] = 100 * (r["kast_rounds"] or 0) / rounds
     r["hs_pct"] = 100 * (r["hs_kills"] or 0) / max(k, 1)
     r["win_pct"] = 100 * (r["wins"] or 0) / max(r["matches"], 1)
-    r["rating"] = rating2(k, d, r["assists"] or 0, r["kast_rounds"] or 0, r["damage"] or 0, rounds)
     r["entry_rate"] = 100 * (r["entry_attempts"] or 0) / rounds
     r["entry_win_pct"] = 100 * (r["entry_wins"] or 0) / max(r["entry_attempts"] or 0, 1)
     r["trade_kpr"] = 100 * (r["trade_kills"] or 0) / rounds        # per 100 rounds
@@ -260,7 +302,6 @@ def derive(r: dict) -> dict:
     r["util_adr"] = (r["util_damage"] or 0) / rounds
     r["flashed_pr"] = (r["enemies_flashed"] or 0) / rounds
     r["flash_assists_pr"] = 100 * (r["flash_assists"] or 0) / rounds
-    r["swing_pr"] = 100 * (r.get("swing") or 0) / rounds        # % win-probability per round
     r["ekd"] = (r.get("e_kills") or 0) / max(r.get("e_deaths") or 0, 1)
     r["eadr"] = (r.get("e_damage") or 0) / rounds
     return r

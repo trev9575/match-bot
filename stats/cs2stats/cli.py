@@ -89,12 +89,14 @@ def main(argv=None):
         stat = a[1] if len(a) > 1 else "rating"
         mm = int(a[2]) if len(a) > 2 else 1
         rows = ranked(DB(DB_PATH).aggregates(), stat, min_matches=mm)
-        print(f"{'#':>2} {'Player':16}{'M':>2}{'W-L':>5}{'R3.0':>6}{'R2.0':>6}{'Swing%':>7}"
+        print(f"{'#':>2} {'Player':16}{'M':>2}{'W-L':>5}{'R3.0':>6}{'Swing%':>7}"
               f"{'eK-eD':>9}{'eADR':>6}{'KAST':>5} | {'Kill':>5}{'Dmg':>5}{'Surv':>5}{'KAST':>5}{'MK':>5}{'Swg':>5}")
         for i, r in enumerate(rows, 1):
             ekd = f"{r['e_kills']:.0f}-{r['e_deaths']:.0f}"
-            print(f"{i:>2} {r['name'][:15]:16}{r['matches']:>2}{r['wins']:>3}-{r['losses']}{r['rating']:>6.2f}"
-                  f"{r['rating2']:>6.2f}{r['swing_pr']:>+7.2f}{ekd:>9}{r['eadr']:>6.1f}{r['kast']:>4.0f}% | "
+            rt = f"{r['rating']:>6.2f}" if r['rating'] is not None else f"{'-':>6}"
+            sw = f"{r['swing_pr']:>+7.2f}" if r['swing_pr'] is not None else f"{'-':>7}"
+            print(f"{i:>2} {r['name'][:15]:16}{r['matches']:>2}{r['wins']:>3}-{r['losses']}{rt}"
+                  f"{sw}{ekd:>9}{r['eadr']:>6.1f}{r['kast']:>4.0f}% | "
                   + "".join(f"{r.get('sub_' + k, 0):>5.2f}" for k in
                             ("kills", "damage", "survival", "kast", "multikill", "swing")))
     else:

@@ -1,5 +1,6 @@
 const { SlashCommandBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder } = require("discord.js");
 const { buildConnectMessage } = require("../lib/serverInfo");
+const teams = require("../lib/teams");
 
 module.exports = {
     data: new SlashCommandBuilder()
@@ -45,7 +46,11 @@ module.exports = {
                     new ButtonBuilder()
                         .setCustomId(`start_picking:${matchId}`)
                         .setLabel("Start Picking")
-                        .setStyle(ButtonStyle.Primary)
+                        .setStyle(ButtonStyle.Primary),
+                    new ButtonBuilder()
+                        .setCustomId(`randomize:${matchId}`)
+                        .setLabel("Randomize Teams (by Elo)")
+                        .setStyle(ButtonStyle.Secondary)
                 );
 
                 // This expects to be called from the original lobby message interaction (button)
@@ -225,6 +230,25 @@ module.exports = {
                 await match.showDraftBoard(interaction);
             },
 
+            // "Randomize Teams": two random captains, everyone else split so average Elo is even
+            async randomizeTeams(interaction) {
+                if (!teams.canRun(interaction, match))
+                    return interaction.reply({ content: "Only the person who started the match can randomize teams.", ephemeral: true });
+                if (match.players.length < 2)
+                    return interaction.reply({ content: "Need at least 2 players to make teams.", ephemeral: true });
+                await interaction.deferUpdate();
+
+                const result = await teams.balancedTeams(match.players);
+                match.captains = result.captains;
+                match.team1 = result.team1;
+                match.team2 = result.team2;
+                match.turn = null;
+
+                await interaction.channel.send({ embeds: [teams.balanceEmbed(result, interaction.guild)] });
+                await match.showDraftBoard(interaction);   // final board: connect info + move button
+                await match.movePlayers(interaction, client);
+            },
+
             // Move users into configured voice channels
             async movePlayers(interaction, client) {
                 // acknowedge the button if called directly
@@ -290,7 +314,11 @@ module.exports = {
             new ButtonBuilder()
                 .setCustomId(`start_picking:${matchId}`)
                 .setLabel("Start Picking")
-                .setStyle(ButtonStyle.Primary)
+                .setStyle(ButtonStyle.Primary),
+            new ButtonBuilder()
+                .setCustomId(`randomize:${matchId}`)
+                .setLabel("Randomize Teams (by Elo)")
+                .setStyle(ButtonStyle.Secondary)
         );
 
         await interaction.reply({ embeds: [embed], components: [buttons] });

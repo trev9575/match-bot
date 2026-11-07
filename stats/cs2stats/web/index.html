@@ -60,6 +60,21 @@
   tr.click:hover td.stick { background: var(--panel-2); }
   .pname { font-weight: 600; }
   .tag { display: inline-block; font-size: 10px; padding: 1px 5px; border-radius: 4px; border: 1px solid var(--line); color: var(--muted); margin-left: 6px; vertical-align: 1px; font-weight: 500; }
+  .rk { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .rk-badge { display: inline-flex; align-items: center; justify-content: center; min-width: 42px; height: 20px; padding: 0 6px;
+    border-radius: 10px 3px 10px 3px; font-size: 11px; font-weight: 700; letter-spacing: .3px; color: #111;
+    background: linear-gradient(135deg, var(--c), color-mix(in srgb, var(--c) 60%, #fff)); box-shadow: inset 0 0 0 1px rgba(0,0,0,.25); }
+  .rk-badge.dark { color: #f2f2f2; background: linear-gradient(135deg, var(--c), color-mix(in srgb, var(--c) 75%, #fff));
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,.45); }
+  .rk-badge.red { color: #fff; }
+  .rk-badge.none { background: var(--panel-2); color: var(--muted); box-shadow: inset 0 0 0 1px var(--line); }
+  .rk img { height: 22px; width: auto; display: block; }
+  .rk .elo { color: var(--fg); font-weight: 600; }
+  .rk .elo.prov { color: var(--muted); font-weight: 400; }
+  .big-rank { display: flex; align-items: center; gap: 10px; justify-content: flex-end; margin-top: 8px; }
+  .big-rank .rk-badge { height: 26px; min-width: 56px; font-size: 13px; }
+  .big-rank img { height: 34px; }
+  .delta.up { color: var(--good); } .delta.down { color: var(--bad); }
   .wl { display: inline-block; width: 20px; text-align: center; border-radius: 4px; font-weight: 600; font-size: 12px; }
   .wl.W { background: rgba(74,222,128,.15); color: var(--good); }
   .wl.L { background: rgba(248,113,113,.15); color: var(--bad); }
@@ -137,8 +152,31 @@ document.addEventListener("click", (e) => {
 });
 window.addEventListener("popstate", route);
 const pLink = (sid, name) => `<a data-nav href="/player/${esc(sid)}">${esc(name)}</a>`;
-const ratingCls = (v) => (num(v) >= 1.1 ? "good" : num(v) < 0.9 ? "bad" : "");
-const kindTag = (r) => (r.rating_kind === "2.0" ? `<span class="tag" title="Played only before Rating 3.0 data was recorded; showing Rating 2.0">2.0</span>` : "");
+const ratingCls = (v) => (v == null ? "" : num(v) >= 1.1 ? "good" : num(v) < 0.9 ? "bad" : "");
+const rt = (v) => (v == null ? "–" : f2(v));          // Rating 3.0, or a dash for games without 3.0 data
+const swingTxt = (v) => (v == null ? "–" : sgn(v));
+const swingCls = (v) => (v == null ? "" : num(v) >= 0 ? "good" : "bad");
+let RANK_IMAGES = {}, PLACEMENTS = 5;                  // custom badge images from the server, if any
+async function loadRanks() {
+  try { const d = await api("ranks"); RANK_IMAGES = d.images || {}; PLACEMENTS = d.placement_matches || 5; } catch (_) {}
+}
+// Light text on dark (black) and red badges, dark text on the rest
+function badgeTone(hex) {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex || "");
+  if (!m) return "";
+  const n = parseInt(m[1], 16), r = n >> 16, g = (n >> 8) & 255, b = n & 255;
+  if (0.299 * r + 0.587 * g + 0.114 * b < 70) return "dark";
+  return r > 150 && g < 90 && b < 90 ? "red" : "";
+}
+function badge(r) {
+  if (!r || r.elo == null) return `<span class="rk-badge none" title="No matches yet">—</span>`;
+  if (!r.rank) return `<span class="rk-badge none" title="${esc(r.rank_name)}">${r.placed ? "EXP" : "?"}</span>`;
+  const img = RANK_IMAGES[r.rank];
+  if (img) return `<img src="${esc(img)}" alt="${esc(r.rank_name)}" title="${esc(r.rank_name)}">`;
+  return `<span class="rk-badge ${badgeTone(r.rank_color)}" style="--c:${esc(r.rank_color)}" title="${esc(r.rank_name)}">${esc(r.rank_short)}</span>`;
+}
+const rankCell = (r) => (r.elo == null ? "–" : `<span class="rk">${badge(r)}<span class="elo ${r.rank ? "" : "prov"}" title="${r.rank ? esc(r.rank_name) : "Provisional until placed"}">${r.elo}</span></span>`);
+const delta = (d) => (d == null ? "–" : `<span class="delta ${d > 0 ? "up" : d < 0 ? "down" : ""}">${d > 0 ? "+" : ""}${d}</span>`);
 
 // ---------------------------------------------------------------- sortable tables
 // cols: [{k, label, fmt(row) -> html, cls, left, sort(row) -> value, nosort, title}]
@@ -173,13 +211,14 @@ table.onSort = {};
 
 // ---------------------------------------------------------------- leaderboard page
 const LB = {view: "overview", q: "", min2: false, period: "all", map: ""};
-const NAME_COL = {k: "name", label: "Player", left: true, stick: true, fmt: (r) => `<span class="pname">${pLink(r.steamid, r.name)}</span>${kindTag(r)}`, sort: (r) => r.name.toLowerCase()};
+const NAME_COL = {k: "name", label: "Player", left: true, stick: true, fmt: (r) => `<span class="pname">${pLink(r.steamid, r.name)}</span>`, sort: (r) => r.name.toLowerCase()};
+const RANK_COL = {k: "elo", label: "Rank · Elo", left: true, fmt: rankCell, sort: (r) => (r.rank ? 100000 : 0) + num(r.elo), title: "CS:GO-style rank from win/loss Elo (Glicko-2)"};
+const RATING_COL = {k: "rating", label: "Rating 3.0", fmt: (r) => rt(r.rating), cls: "b", sort: (r) => (r.rating == null ? -9 : r.rating)};
 const VIEWS = {
   overview: {label: "Overview", cols: [NAME_COL,
-    {k: "matches", label: "M"}, {k: "wins", label: "W"}, {k: "losses", label: "L"},
-    {k: "rating", label: "Rating 3.0", fmt: (r) => f2(r.rating), cls: "b", title: "Rating 3.0 (falls back to 2.0 if tagged)"},
-    {k: "rating2", label: "Rating 2.0", fmt: (r) => f2(r.rating2)},
-    {k: "swing_pr", label: "Swing", fmt: (r) => (r.rating_kind === "2.0" ? "–" : sgn(r.swing_pr)), cls: (r) => (r.rating_kind === "2.0" ? "" : num(r.swing_pr) >= 0 ? "good" : "bad"), title: "Average change in your team's round-win chance per round"},
+    RANK_COL, {k: "matches", label: "M"}, {k: "wins", label: "W"}, {k: "losses", label: "L"},
+    RATING_COL,
+    {k: "swing_pr", label: "Swing", fmt: (r) => swingTxt(r.swing_pr), cls: (r) => swingCls(r.swing_pr), sort: (r) => (r.swing_pr == null ? -999 : r.swing_pr), title: "Average change in your team's round-win chance per round"},
     {k: "kills", label: "K"}, {k: "deaths", label: "D"}, {k: "assists", label: "A"},
     {k: "kd", label: "K/D", fmt: (r) => f2(r.kd)}, {k: "adr", label: "ADR", fmt: (r) => f1(r.adr)},
     {k: "kast", label: "KAST", fmt: (r) => pct(r.kast)}, {k: "hs_pct", label: "HS", fmt: (r) => pct(r.hs_pct)}]},
@@ -194,7 +233,7 @@ const VIEWS = {
     {k: "enemies_flashed", label: "Enemies flashed"}, {k: "flash_assists", label: "Flash assists"},
     {k: "team_flashed", label: "Teammates flashed"}]},
   rating: {label: "Rating 3.0 breakdown", note: "Each sub-rating is scaled so 1.00 is the group average. Weights: Swing 33%, Kills 25%, Survival 14%, KAST 12%, Damage 11%, Multi-kill 5%.", cols: [NAME_COL,
-    {k: "rating", label: "Rating 3.0", fmt: (r) => f2(r.rating), cls: "b"},
+    RATING_COL,
     ...["swing", "kills", "survival", "kast", "damage", "multikill"].map((k) => ({k: "sub_" + k, label: {swing: "Swing", kills: "Kills", survival: "Survival", kast: "KAST", damage: "Damage", multikill: "Multi-kill"}[k],
       fmt: (r) => (r["sub_" + k] == null ? "–" : f2(r["sub_" + k])), cls: (r) => ratingCls(r["sub_" + k])}))]},
   profile: {label: "Profiles", note: "Percentile within the group, 0–100: 50 is the middle of the group.", cols: [NAME_COL,
@@ -202,19 +241,20 @@ const VIEWS = {
 };
 
 async function pageHome() {
-  const [sum, lb, ms] = await Promise.all([api("summary"), api(`leaderboard?period=${LB.period}&map=${encodeURIComponent(LB.map)}`), api("matches?limit=15")]);
+  const [sum, lb, ms] = await Promise.all([api("summary"), api(`leaderboard?period=${LB.period}&map=${encodeURIComponent(LB.map)}`), api("matches?limit=15"), loadRanks()]);
   const players = lb.players, minM = lb.min_matches;
   document.title = "CS2 5v5 Leaderboard";
   const leader = sum.leader;
   $app.innerHTML = `
     <div class="top"><div>
       <h1 class="brand">CS2 5v5 Leaderboard</h1>
-      <p class="take">${leader ? `<b>${esc(leader.name)}</b> leads the group with a <b>${f2(leader.rating)}</b> rating. ` : ""}Ratings are relative to this group: 1.00 is the average player in our games.</p>
+      <p class="take">${leader ? `<b>${esc(leader.name)}</b> leads the group with a <b>${f2(leader.rating)}</b> Rating 3.0. ` : ""}${sum.top_elo ? `<b>${esc(sum.top_elo.name)}</b> has the highest rank: ${esc(sum.top_elo.rank_name)} (${sum.top_elo.elo} Elo). ` : ""}Ratings are relative to this group: 1.00 is the average player in our games.</p>
     </div></div>
     <div class="tiles">
       <div class="card"><div class="tile-label">Matches</div><div class="tile-num">${sum.matches}</div><div class="tile-sub">${sum.first_played ? "Competitive maps since " + fmtDate(sum.first_played) : "No matches yet"}</div></div>
       <div class="card"><div class="tile-label">Rounds played</div><div class="tile-num">${sum.rounds}</div><div class="tile-sub">Live rounds only, no warmup</div></div>
       <div class="card"><div class="tile-label">Players</div><div class="tile-num">${sum.players}</div><div class="tile-sub">Everyone who played a map</div></div>
+      <div class="card"><div class="tile-label">Highest rank</div><div class="tile-num">${sum.top_elo ? `<span class="rk">${badge(sum.top_elo)} ${sum.top_elo.elo}</span>` : "–"}</div><div class="tile-sub">${sum.top_elo ? pLink(sum.top_elo.steamid, sum.top_elo.name) : `Nobody has ${PLACEMENTS} matches yet`}</div></div>
       <div class="card"><div class="tile-label">Most kills</div><div class="tile-num">${sum.top_killer ? sum.top_killer.kills : "–"}</div><div class="tile-sub">${sum.top_killer ? pLink(sum.top_killer.steamid, sum.top_killer.name) : ""}</div></div>
     </div>
     <section class="card">
@@ -230,10 +270,12 @@ async function pageHome() {
       <p class="note" id="viewnote" ${VIEWS[LB.view].note ? "" : "hidden"}>${esc(VIEWS[LB.view].note || "")}</p>
       <div class="scroll" id="lbtable"></div>
     </section>
+    <section class="card"><h2>Playstyles</h2>
+      <p class="note">Each dot is a player. The closer a dot sits to a category, the more that category stands out in their game compared with the rest of the group. The middle is the most typical, balanced profile; the edge is the most extreme. Built from the five profile scores. Click a dot for the profile.</p>
+      <div id="playstyle" style="overflow-x:auto"></div></section>
     <div class="grid2">
-      <section class="card"><h2>Rating by player</h2>
-        <p class="note">Bars are Rating 3.0; dots show the old Rating 2.0. The dashed line marks the group average (1.00).</p>
-        <div class="legend"><span><span class="sw" style="background:var(--r3)"></span>Rating 3.0</span><span><span class="sw dot"></span>Rating 2.0</span></div>
+      <section class="card"><h2>Rating 3.0 by player</h2>
+        <p class="note">The dashed line marks the group average (1.00).</p>
         <div id="chart" style="overflow-x:auto"></div></section>
       <section class="card"><h2>Category leaders</h2><p class="note">Among players with ${minM}+ matches.</p><div id="leaders" class="scroll"></div></section>
     </div>
@@ -262,6 +304,8 @@ async function pageHome() {
   document.getElementById("map").addEventListener("change", (e) => { LB.map = e.target.value; route(); });
 
   document.getElementById("chart").innerHTML = ratingChart(players);
+  const styled = players.filter((r) => r.matches >= minM);
+  document.getElementById("playstyle").innerHTML = playstyleMap(styled.length >= 3 ? styled : players);
   document.getElementById("leaders").innerHTML = leaders(players.filter((r) => r.matches >= minM));
 
   let shown = ms.matches;
@@ -287,20 +331,19 @@ function matchList(ms) {
 }
 
 function ratingChart(rows) {
-  rows = [...rows].sort((a, b) => num(b.rating) - num(a.rating));
-  if (!rows.length) return `<div class="empty">No players yet.</div>`;
+  rows = rows.filter((r) => r.rating != null).sort((a, b) => num(b.rating) - num(a.rating));
+  if (!rows.length) return `<div class="empty">No Rating 3.0 data yet.</div>`;
   const rowH = 24, left = 130, right = 46, W = 640, H = rows.length * rowH + 24;
-  const max = Math.max(1.5, ...rows.map((r) => Math.max(num(r.rating), num(r.rating2)))) * 1.05;
+  const max = Math.max(1.5, ...rows.map((r) => num(r.rating))) * 1.05;
   const x = (v) => left + (W - left - right) * (Math.max(0, num(v)) / max);
   let s = `<svg viewBox="0 0 ${W} ${H}" width="100%" style="min-width:520px" role="img" aria-label="Rating by player">`;
   for (let t = 0; t <= max; t += 0.5) s += `<line x1="${x(t)}" x2="${x(t)}" y1="0" y2="${H - 18}" stroke="var(--line)"/><text x="${x(t)}" y="${H - 4}" fill="var(--faint)" font-size="11" text-anchor="middle">${t.toFixed(1)}</text>`;
   rows.forEach((r, i) => {
     const y = i * rowH + 4, cy = y + 9;
     s += `<a href="/player/${esc(r.steamid)}" data-nav><text x="${left - 8}" y="${cy}" dy="0.35em" text-anchor="end" fill="var(--fg)" font-size="12">${esc(r.name.length > 16 ? r.name.slice(0, 15) + "…" : r.name)}</text></a>`;
-    s += `<rect x="${left}" y="${y}" width="${Math.max(1, x(r.rating) - left)}" height="18" rx="3" fill="var(--r3)" opacity="${r.rating_kind === "2.0" ? 0.45 : 1}"><title>${esc(r.name)}: ${f2(r.rating)}</title></rect>`;
-    if (x(r.rating) - left > 34) s += `<text x="${left + 6}" y="${cy}" dy="0.35em" fill="#fff" font-size="11" font-weight="600">${f2(r.rating)}</text>`;
-    s += `<circle cx="${x(r.rating2)}" cy="${cy}" r="4.5" fill="var(--panel)" stroke="var(--r2)" stroke-width="2"><title>Rating 2.0: ${f2(r.rating2)}</title></circle>`;
-    s += `<text x="${x(r.rating2) + 8}" y="${cy}" dy="0.35em" fill="var(--r2)" font-size="11" stroke="var(--panel)" stroke-width="3" paint-order="stroke">${f2(r.rating2)}</text>`;
+    s += `<rect x="${left}" y="${y}" width="${Math.max(1, x(r.rating) - left)}" height="18" rx="3" fill="var(--r3)"><title>${esc(r.name)}: ${f2(r.rating)}</title></rect>`;
+    const inside = x(r.rating) - left > 40;
+    s += `<text x="${inside ? x(r.rating) - 6 : x(r.rating) + 6}" y="${cy}" dy="0.35em" text-anchor="${inside ? "end" : "start"}" fill="${inside ? "#fff" : "var(--fg)"}" font-size="11" font-weight="600">${f2(r.rating)}</text>`;
   });
   s += `<line x1="${x(1)}" x2="${x(1)}" y1="0" y2="${H - 18}" stroke="var(--muted)" stroke-dasharray="3 3"/></svg>`;
   return s;
@@ -309,7 +352,8 @@ function ratingChart(rows) {
 function leaders(rows) {
   if (!rows.length) return `<div class="empty">Nobody has enough matches yet.</div>`;
   const cats = [
-    ["Rating", "rating", (r) => f2(r.rating)], ...(rows.some((r) => r.rating_kind === "3.0") ? [["Round swing", "swing_pr", (r) => sgn(r.swing_pr) + " / round"]] : []),
+    ["Rating 3.0", "rating", (r) => rt(r.rating)], ["Highest Elo", "elo", (r) => `<span class="rk">${badge(r)} ${r.elo}</span>`],
+    ["Round swing", "swing_pr", (r) => swingTxt(r.swing_pr) + " / round"],
     ["Most kills", "kills", (r) => r.kills + " kills"], ["ADR", "adr", (r) => f1(r.adr)],
     ["KAST", "kast", (r) => pct(r.kast)], ["Headshot %", "hs_pct", (r) => pct(r.hs_pct)],
     ["Opening duels", "entry_wins", (r) => `${r.entry_wins}/${r.entry_attempts} won`],
@@ -320,7 +364,7 @@ function leaders(rows) {
     ["Teammates flashed 🙃", "team_flashed", (r) => r.team_flashed + "×"],
   ];
   return `<table><thead><tr><th class="l nosort">Category</th><th class="l nosort">Player</th><th class="nosort">Value</th></tr></thead><tbody>` +
-    cats.map(([label, k, fmt]) => { const r = rows.reduce((a, b) => (num(b[k]) > num(a[k]) ? b : a)); return `<tr><td class="l">${label}</td><td class="l pname">${pLink(r.steamid, r.name)}</td><td>${fmt(r)}</td></tr>`; }).join("") +
+    cats.map(([label, k, fmt]) => { const has = rows.filter((r) => r[k] != null); if (!has.length) return ""; const r = has.reduce((a, b) => (num(b[k]) > num(a[k]) ? b : a)); return `<tr><td class="l">${label}</td><td class="l pname">${pLink(r.steamid, r.name)}</td><td>${fmt(r)}</td></tr>`; }).join("") +
     `</tbody></table>`;
 }
 
@@ -328,12 +372,13 @@ function explainer() {
   return `<details class="card"><summary>How the stats work</summary><dl>
     <dt>Rating 3.0</dt><dd>Our approximation of HLTV Rating 3.0: Swing 33%, Kills 25%, Survival 14%, KAST 12%, Damage 11%, Multi-kills 5%. Kills, deaths and damage are eco-adjusted, so a rifle killing a pistol counts less. 1.00 is the average player in our games.</dd>
     <dt>Round swing</dt><dd>How much your actions changed your team's chance of winning the round, averaged per round. Kills after the round is decided don't count.</dd>
-    <dt>Rating 2.0</dt><dd>The older, public HLTV 2.0 formula, kept for comparison. Players tagged <span class="tag">2.0</span> only have games from before Rating 3.0 data was recorded.</dd>
+    <dt>Rank &amp; Elo</dt><dd>Works like CS:GO matchmaking, which Valve built on Glicko-2: only wins and losses move it, it moves more while your rating is still uncertain (new or returning players), and that uncertainty grows again when you don't play. Everyone starts at 1500 (Gold Nova III). Your rank shows after ${PLACEMENTS} placement matches and is hidden again after a month without playing. The rank bands are our own spacing; Valve never published theirs.</dd>
     <dt>ADR</dt><dd>Damage to enemies per round, capped at their remaining HP.</dd>
     <dt>KAST</dt><dd>% of rounds with a kill, assist, survival, or a death your team traded.</dd>
     <dt>Opening duel</dt><dd>The first kill of a round. It counts for both the killer and the player who died.</dd>
     <dt>Trade</dt><dd>Killing the enemy who killed your teammate within 5 seconds.</dd>
     <dt>Clutch</dt><dd>Last player alive on your side against at least one enemy.</dd>
+    <dt>Missing ratings</dt><dd>A few early games were imported from server logs before Rating 3.0 data was recorded. They count for everything except Rating 3.0 and swing, which show "–" for a player with no other games.</dd>
     <dt>Profiles</dt><dd>Firepower, Entrying, Trading, Clutching and Utility are 0–100 percentiles within the group.</dd>
     <dt>What counts</dt><dd>Only finished competitive maps: no warmup, knife rounds, retakes, wingman or deathmatch.</dd>
   </dl></details>`;
@@ -341,7 +386,7 @@ function explainer() {
 
 // ---------------------------------------------------------------- player page
 async function pagePlayer(sid) {
-  const d = await api("players/" + sid);
+  const [d] = await Promise.all([api("players/" + sid), loadRanks()]);
   const p = d.player, h = d.history;
   document.title = `${p.name} · CS2 5v5`;
   const cats = ["firepower", "entrying", "trading", "clutching", "utility"];
@@ -349,7 +394,7 @@ async function pagePlayer(sid) {
   const subLabel = {swing: "Swing", kills: "Kills", survival: "Survival", kast: "KAST", damage: "Damage", multikill: "Multi-kill"};
   const tiles = [
     ["K/D", f2(p.kd), `${p.kills}-${p.deaths}-${p.assists}`], ["ADR", f1(p.adr), "damage / round"],
-    ["KAST", pct(p.kast), "rounds with impact"], ["Swing", p.rating_kind === "2.0" ? "–" : sgn(p.swing_pr), "win chance / round"],
+    ["KAST", pct(p.kast), "rounds with impact"], ["Swing", swingTxt(p.swing_pr), "win chance / round"],
     ["Headshots", pct(p.hs_pct), `${p.hs_kills} HS kills`], ["Opening duels", pct(p.entry_win_pct), `${p.entry_wins}/${p.entry_attempts} won`],
     ["Clutches", `${p.clutch_wins}/${p.clutch_attempts}`, `${p.aces} aces · ${p.k4} 4Ks`], ["Utility dmg", f1(p.util_adr), "per round"],
   ];
@@ -357,19 +402,23 @@ async function pagePlayer(sid) {
     <div class="crumb"><a data-nav href="/">← Leaderboard</a></div>
     <section class="card hero">
       <div><h1>${esc(p.name)}</h1>
-        <div class="meta">#${p.rank} of ${d.group_size} · ${p.matches} matches · ${p.wins}W–${p.losses}L (${pct(100 * p.wins / Math.max(p.matches, 1))}) · ${p.rounds} rounds
+        <div class="meta">${p.position ? `#${p.position} of ${d.group_size} by rating · ` : ""}${p.matches} matches · ${p.wins}W–${p.losses}L (${pct(100 * p.wins / Math.max(p.matches, 1))}) · ${p.rounds} rounds
         · <a href="https://steamcommunity.com/profiles/${esc(p.steamid)}" target="_blank" rel="noopener">Steam profile ↗</a></div></div>
-      <div class="big-rating"><div class="n">${f2(p.rating)}</div><div class="l">${p.rating_kind === "2.0" ? "Rating 2.0 (no 3.0 data yet)" : "Rating 3.0 · old 2.0: " + f2(p.rating2)}</div></div>
+      <div class="big-rating"><div class="n">${rt(p.rating)}</div><div class="l">Rating 3.0</div>
+        <div class="big-rank">${badge(p)}<span><b>${p.elo ?? "–"}</b> Elo<br><span class="tile-sub">${esc(p.rank_name || "")}</span></span></div></div>
     </section>
     <div class="tiles">${tiles.map(([l, n, s]) => `<div class="card"><div class="tile-label">${l}</div><div class="tile-num">${n}</div><div class="tile-sub">${s}</div></div>`).join("")}</div>
     <div class="grid2">
       <section class="card"><h2>Profile</h2><p class="note">Percentile within the group: 50 is the middle.</p>
         <div class="bars">${cats.map((k) => `<div class="bar-row"><span>${k[0].toUpperCase() + k.slice(1)}</span><div class="bar-track"><div class="bar-fill" style="width:${num(p[k])}%"></div></div><span class="bar-val">${f0(p[k])}</span></div>`).join("")}</div></section>
       <section class="card"><h2>Rating 3.0 breakdown</h2><p class="note">1.00 is the group average for each part.</p>
-        ${p.rating_kind === "2.0" ? `<div class="empty">No Rating 3.0 data for these games yet.</div>` :
+        ${p.rating == null ? `<div class="empty">No Rating 3.0 data for these games yet.</div>` :
           `<div class="bars">${subs.map((k) => { const v = num(p["sub_" + k]); return `<div class="bar-row"><span>${subLabel[k]}</span><div class="bar-track"><div class="bar-fill" style="width:${Math.min(100, (v / 2) * 100)}%;background:${v >= 1 ? "var(--r3)" : "var(--faint)"}"></div></div><span class="bar-val">${f2(v)}</span></div>`; }).join("")}</div>`}</section>
     </div>
-    <section class="card"><h2>Rating over time</h2><p class="note">Each dot is one match, oldest on the left.</p>${trend(h)}</section>
+    <div class="grid2">
+      <section class="card"><h2>Elo over time</h2><p class="note">After each match, oldest on the left. Green dots are wins.</p>${trend(h, "elo_after")}</section>
+      <section class="card"><h2>Rating 3.0 over time</h2><p class="note">Each dot is one match; the dashed line is the group average.</p>${trend(h, "rating")}</section>
+    </div>
     <section class="card"><h2>Matches</h2><p class="note">Click a match for the full scorecard.</p><div class="scroll" id="hist"></div></section>
     <section class="card"><h2>By map</h2><div class="scroll" id="maps"></div></section>`;
   const drawHist = () => {
@@ -383,8 +432,9 @@ async function pagePlayer(sid) {
       {k: "adr", label: "ADR", fmt: (r) => f0(r.damage / Math.max(r.rounds, 1)), sort: (r) => r.damage / Math.max(r.rounds, 1)},
       {k: "kast", label: "KAST", fmt: (r) => pct((100 * r.kast_rounds) / Math.max(r.rounds, 1)), sort: (r) => r.kast_rounds / Math.max(r.rounds, 1)},
       {k: "hs", label: "HS", fmt: (r) => pct((100 * r.hs_kills) / Math.max(r.kills, 1)), sort: (r) => r.hs_kills / Math.max(r.kills, 1)},
-      {k: "swing_pr", label: "Swing", fmt: (r) => (r.rating_kind === "2.0" ? "–" : sgn(r.swing_pr)), cls: (r) => (r.rating_kind === "2.0" ? "" : num(r.swing_pr) >= 0 ? "good" : "bad")},
-      {k: "rating", label: "Rating", fmt: (r) => f2(r.rating) + kindTag(r), cls: (r) => "b " + ratingCls(r.rating)},
+      {k: "swing_pr", label: "Swing", fmt: (r) => swingTxt(r.swing_pr), cls: (r) => swingCls(r.swing_pr), sort: (r) => (r.swing_pr == null ? -999 : r.swing_pr)},
+      {k: "rating", label: "Rating", fmt: (r) => rt(r.rating), cls: (r) => "b " + ratingCls(r.rating), sort: (r) => (r.rating == null ? -9 : r.rating)},
+      {k: "elo_delta", label: "Elo", fmt: (r) => `${delta(r.elo_delta)} <span class="tile-sub">${r.elo_after ?? ""}</span>`, sort: (r) => num(r.elo_delta)},
     ], h, {sortKey: "played_at", href: (r) => "/match/" + r.match_id});
   };
   drawHist();
@@ -393,30 +443,86 @@ async function pagePlayer(sid) {
     document.getElementById("maps").innerHTML = table("maps", [
       {k: "map", label: "Map", left: true, fmt: (r) => `<b>${esc(mapName(r.map))}</b>`},
       {k: "matches", label: "M"}, {k: "wins", label: "W"}, {k: "losses", label: "L"},
-      {k: "rating", label: "Rating", fmt: (r) => f2(r.rating), cls: "b"},
+      {k: "rating", label: "Rating", fmt: (r) => rt(r.rating), cls: "b", sort: (r) => (r.rating == null ? -9 : r.rating)},
       {k: "kd", label: "K/D", fmt: (r) => f2(r.kd)}, {k: "adr", label: "ADR", fmt: (r) => f1(r.adr)}, {k: "kast", label: "KAST", fmt: (r) => pct(r.kast)},
     ], d.maps, {sortKey: "matches"});
   };
   drawMaps();
 }
 
-function trend(h) {
-  const pts = [...h].reverse();
-  if (pts.length < 2) return `<div class="empty">Needs at least two matches.</div>`;
-  const W = 1000, H = 200, pad = 28;
-  const vals = pts.map((p) => num(p.rating));
-  const lo = Math.min(0.4, ...vals) - 0.1, hi = Math.max(1.6, ...vals) + 0.1;
+function trend(h, key) {
+  const pts = [...h].reverse().filter((p) => p[key] != null);
+  if (pts.length < 2) return `<div class="empty">Needs at least two matches${key === "rating" ? " with Rating 3.0 data" : ""}.</div>`;
+  const W = 1000, H = 220, pad = 34, isElo = key !== "rating";
+  const vals = pts.map((p) => num(p[key]));
+  const mid = isElo ? 1500 : 1;
+  const span = isElo ? 100 : 0.4;
+  const lo = Math.min(mid - span, ...vals) - (isElo ? 20 : 0.1), hi = Math.max(mid + span, ...vals) + (isElo ? 20 : 0.1);
   const x = (i) => pad + ((W - 2 * pad) * i) / (pts.length - 1), y = (v) => H - pad - ((H - 2 * pad) * (v - lo)) / (hi - lo);
-  let s = `<svg viewBox="0 0 ${W} ${H}" width="100%" style="max-height:240px" role="img" aria-label="Rating over time">`;
-  s += `<line x1="${pad}" x2="${W - pad}" y1="${y(1)}" y2="${y(1)}" stroke="var(--muted)" stroke-dasharray="3 3"/><text x="4" y="${y(1)}" dy="0.35em" fill="var(--faint)" font-size="10">1.00</text>`;
-  s += `<polyline fill="none" stroke="var(--r3)" stroke-width="2" points="${pts.map((p, i) => `${x(i)},${y(num(p.rating))}`).join(" ")}"/>`;
-  pts.forEach((p, i) => { s += `<a href="/match/${p.match_id}" data-nav><circle cx="${x(i)}" cy="${y(num(p.rating))}" r="5" fill="${p.result === "W" ? "var(--good)" : p.result === "L" ? "var(--bad)" : "var(--muted)"}" stroke="var(--panel)" stroke-width="2"><title>${esc(mapName(p.map))} ${fmtDate(p.played_at)} · ${f2(p.rating)} (${p.result})</title></circle></a>`; });
+  let s = `<svg viewBox="0 0 ${W} ${H}" width="100%" style="max-height:240px" role="img" aria-label="${isElo ? "Elo" : "Rating"} over time">`;
+  s += `<line x1="${pad}" x2="${W - pad}" y1="${y(mid)}" y2="${y(mid)}" stroke="var(--muted)" stroke-dasharray="3 3"/><text x="2" y="${y(mid)}" dy="0.35em" fill="var(--faint)" font-size="11">${isElo ? 1500 : "1.00"}</text>`;
+  s += `<polyline fill="none" stroke="var(--r3)" stroke-width="2" points="${pts.map((p, i) => `${x(i)},${y(num(p[key]))}`).join(" ")}"/>`;
+  pts.forEach((p, i) => { s += `<a href="/match/${p.match_id}" data-nav><circle cx="${x(i)}" cy="${y(num(p[key]))}" r="5" fill="${p.result === "W" ? "var(--good)" : p.result === "L" ? "var(--bad)" : "var(--muted)"}" stroke="var(--panel)" stroke-width="2"><title>${esc(mapName(p.map))} ${fmtDate(p.played_at)} · ${isElo ? p[key] + " Elo (" + (p.elo_delta > 0 ? "+" : "") + p.elo_delta + ")" : f2(p[key])} · ${p.result}</title></circle></a>`; });
   return s + `</svg>`;
+}
+
+// ---------------------------------------------------------------- playstyle map
+// Each of the five profile scores is a direction around the circle. A player's dot
+// points toward what stands out in their own profile (scores relative to their own
+// average), and sits further out the more their profile differs from the group's
+// average profile. Middle = most typical; edge = most extreme.
+const STYLE_CATS = [["firepower", "Firepower"], ["entrying", "Entrying"], ["trading", "Trading"], ["clutching", "Clutching"], ["utility", "Utility"]];
+function playstyleMap(rows) {
+  rows = rows.filter((r) => STYLE_CATS.every(([k]) => r[k] != null));
+  if (rows.length < 3) return `<div class="empty">Needs at least three players.</div>`;
+  const W = 760, H = 560, cx = W / 2, cy = H / 2 + 6, R = 220;
+  const ang = STYLE_CATS.map((_, i) => -Math.PI / 2 + (i * 2 * Math.PI) / STYLE_CATS.length);
+  const dev = (r) => STYLE_CATS.map(([k]) => (num(r[k]) - 50) / 50);           // -1..1 per category
+  const mean = STYLE_CATS.map((_, i) => rows.reduce((a, r) => a + dev(r)[i], 0) / rows.length);
+  const pts = rows.map((r) => {
+    const d = dev(r), own = d.reduce((a, b) => a + b, 0) / d.length;
+    let vx = 0, vy = 0;
+    d.forEach((v, i) => { vx += (v - own) * Math.cos(ang[i]); vy += (v - own) * Math.sin(ang[i]); });
+    let theta = Math.atan2(vy, vx);
+    if (Math.hypot(vx, vy) < 0.05) theta = ang[d.indexOf(Math.max(...d))];   // flat profile: use best category
+    const dist = Math.sqrt(d.reduce((a, v, i) => a + (v - mean[i]) ** 2, 0) / d.length);
+    // the category the dot points at (nearest direction), for the legend
+    const near = ang.map((a) => Math.abs(Math.atan2(Math.sin(theta - a), Math.cos(theta - a))));
+    const top = STYLE_CATS[near.indexOf(Math.min(...near))][1];
+    return {r, theta, dist, top};
+  });
+  const maxD = Math.max(...pts.map((p) => p.dist)) || 1;
+  pts.forEach((p) => { const rr = (p.dist / maxD) * R * 0.92; p.x = cx + rr * Math.cos(p.theta); p.y = cy + rr * Math.sin(p.theta); });
+  const typical = pts.reduce((a, b) => (b.dist < a.dist ? b : a)), extreme = pts.reduce((a, b) => (b.dist > a.dist ? b : a));
+  let s = `<svg viewBox="0 0 ${W} ${H}" width="100%" style="min-width:520px;max-height:620px" role="img" aria-label="Playstyle map">`;
+  [0.33, 0.66, 1].forEach((f) => { s += `<circle cx="${cx}" cy="${cy}" r="${R * f}" fill="none" stroke="var(--line)" ${f < 1 ? 'stroke-dasharray="2 4"' : ""}/>`; });
+  s += `<text x="${cx + 6}" y="${cy + 14}" fill="var(--faint)" font-size="10">typical</text>`;
+  STYLE_CATS.forEach(([, label], i) => {
+    const ex = cx + R * Math.cos(ang[i]), ey = cy + R * Math.sin(ang[i]);
+    const lx = cx + (R + 26) * Math.cos(ang[i]), ly = cy + (R + 26) * Math.sin(ang[i]);
+    s += `<line x1="${cx}" y1="${cy}" x2="${ex}" y2="${ey}" stroke="var(--line)"/>`;
+    s += `<text x="${lx}" y="${ly}" dy="0.35em" text-anchor="${Math.abs(Math.cos(ang[i])) < 0.2 ? "middle" : Math.cos(ang[i]) > 0 ? "start" : "end"}" fill="var(--fg)" font-size="13" font-weight="600">${label}</text>`;
+  });
+  // labels: nudge apart vertically when dots are close
+  const placed = [];
+  pts.sort((a, b) => a.y - b.y).forEach((p) => {
+    let ly = p.y;
+    for (const q of placed) if (Math.abs(q.lx - p.x) < 90 && Math.abs(q.ly - ly) < 13) ly = q.ly + 13;
+    placed.push({lx: p.x, ly});
+    const hl = p === typical || p === extreme;
+    const tip = `${p.r.name}: ` + STYLE_CATS.map(([k, l]) => `${l} ${f0(p.r[k])}`).join(", ");
+    s += `<a href="/player/${esc(p.r.steamid)}" data-nav><circle cx="${p.x}" cy="${p.y}" r="${hl ? 7 : 5.5}" fill="${p === typical ? "var(--good)" : p === extreme ? "var(--r2)" : "var(--r3)"}" stroke="var(--panel)" stroke-width="2"><title>${esc(tip)}</title></circle>`;
+    s += `<text x="${p.x + 9}" y="${ly}" dy="0.35em" fill="${hl ? "var(--fg)" : "var(--muted)"}" font-size="11" ${hl ? 'font-weight="600"' : ""} stroke="var(--panel)" stroke-width="3" paint-order="stroke">${esc(p.r.name.length > 14 ? p.r.name.slice(0, 13) + "…" : p.r.name)}</text></a>`;
+  });
+  s += `</svg>`;
+  s += `<div class="legend" style="margin-top:6px"><span><span class="sw" style="background:var(--good);border-radius:50%"></span>Most typical: <b>${pLink(typical.r.steamid, typical.r.name)}</b></span>` +
+       `<span><span class="sw" style="background:var(--r2);border-radius:50%"></span>Most extreme: <b>${pLink(extreme.r.steamid, extreme.r.name)}</b> (stands out in ${extreme.top})</span></div>`;
+  return s;
 }
 
 // ---------------------------------------------------------------- match page
 async function pageMatch(id) {
-  const d = await api("matches/" + id);
+  const [d] = await Promise.all([api("matches/" + id), loadRanks()]);
   const m = d.match, ps = d.players;
   const ta = m.team_a_name || "Team A", tb = m.team_b_name || "Team B";
   document.title = `${mapName(m.map)} ${m.score_a}:${m.score_b} · CS2 5v5`;
@@ -425,6 +531,7 @@ async function pageMatch(id) {
   const rounds = log ? [...log].map((c, i) => `<div class="rd ${c === "-" ? "x" : c.toUpperCase()} ${i === half ? "half" : ""}" title="Round ${i + 1}: ${c === "-" ? "?" : (c.toUpperCase() === "A" ? ta : tb) + (c === c.toLowerCase() && c !== "-" ? " (T side)" : " (CT side)")}">${i + 1}</div>`).join("") : "";
   const cols = [
     {k: "name", label: "Player", left: true, stick: true, fmt: (r) => `<span class="pname">${pLink(r.steamid, r.name)}</span>`, sort: (r) => r.name.toLowerCase()},
+    {k: "elo", label: "Rank", left: true, fmt: (r) => `<span class="rk">${badge(r)}</span>`, sort: (r) => num(r.elo)},
     {k: "kills", label: "K"}, {k: "deaths", label: "D"}, {k: "assists", label: "A"},
     {k: "pm", label: "+/−", fmt: (r) => { const v = r.kills - r.deaths; return `<span class="${v > 0 ? "good" : v < 0 ? "bad" : ""}">${v > 0 ? "+" : ""}${v}</span>`; }, sort: (r) => r.kills - r.deaths},
     {k: "adr", label: "ADR", fmt: (r) => f0(r.damage / Math.max(r.rounds, 1)), sort: (r) => r.damage},
@@ -435,8 +542,9 @@ async function pageMatch(id) {
     {k: "clutch", label: "Clutch", fmt: (r) => `${r.clutch_wins}/${r.clutch_attempts}`, sort: (r) => r.clutch_wins},
     {k: "multi", label: "3K+", fmt: (r) => r.k3 + r.k4 + r.k5, sort: (r) => r.k3 + r.k4 + r.k5},
     {k: "util_damage", label: "Util dmg"}, {k: "enemies_flashed", label: "Flashed"},
-    {k: "swing_pr", label: "Swing", fmt: (r) => (r.rating_kind === "2.0" ? "–" : sgn(r.swing_pr)), cls: (r) => (r.rating_kind === "2.0" ? "" : num(r.swing_pr) >= 0 ? "good" : "bad")},
-    {k: "rating", label: "Rating", fmt: (r) => f2(r.rating) + kindTag(r), cls: (r) => "b " + ratingCls(r.rating)},
+    {k: "swing_pr", label: "Swing", fmt: (r) => swingTxt(r.swing_pr), cls: (r) => swingCls(r.swing_pr), sort: (r) => (r.swing_pr == null ? -999 : r.swing_pr)},
+    {k: "rating", label: "Rating", fmt: (r) => rt(r.rating), cls: (r) => "b " + ratingCls(r.rating), sort: (r) => (r.rating == null ? -9 : r.rating)},
+    {k: "elo_delta", label: "Elo", fmt: (r) => `${delta(r.elo_delta)} <span class="tile-sub">${r.elo_after ?? ""}</span>`, sort: (r) => num(r.elo_delta), title: "Elo change from this match, and Elo after it"},
   ];
   const team = (t) => ps.filter((p) => p.team === t);
   $app.innerHTML = `

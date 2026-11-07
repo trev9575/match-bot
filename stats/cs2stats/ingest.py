@@ -58,6 +58,14 @@ def qualifies(summary, players, min_rounds, min_team_size) -> str | None:
     return None
 
 
+def _low_priority():
+    """Parser process runs at the lowest CPU priority so the game server always wins."""
+    try:
+        os.nice(19)
+    except (AttributeError, OSError):
+        pass
+
+
 def analyze_demo(path: str):
     """Runs in a worker process (demo parsing is CPU-heavy)."""
     from .parse_demo import parse_demo
@@ -105,8 +113,17 @@ class DemoWatcher:
         self.poll, self.stable = poll, stable_seconds
         self.min_rounds, self.min_team_size = min_rounds, min_team_size
         self.sizes: dict[str, tuple[int, float]] = {}
-        self.skipped: set[str] = set()
-        self.pool = ProcessPoolExecutor(max_workers=1)
+        self.skipped: set[str] = set()       # this run; also saved in the DB so restarts don't re-read
+        self.done: set[str] | None = None    # loaded from the DB on the first pass
+        self.pool = ProcessPoolExecutor(max_workers=1, initializer=_low_priority)
+        self.pause = 2.0                     # seconds to rest between demos during a backfill
+
+    def _skip(self, path, name, why):
+        self.skipped.add(name)
+        try:
+            self.db.mark_skipped(name, os.path.getsize(path), why)
+        except OSError:
+            pass
 
     def _candidates(self):
         if not os.path.isdir(self.dir):
@@ -126,20 +143,20 @@ class DemoWatcher:
                 self.pool, analyze_demo, path)
         except Exception as e:
             log.exception("failed to parse %s", name)
-            self.skipped.add(name)
+            self._skip(path, name, f"parse error: {e}")
             return None, f"parse error: {e}"
         upgrading = self.db.has(name)          # a log backfill exists for this demo
         if upgrading and qualifies(summary, players, self.min_rounds, self.min_team_size) is None:
             self.db.drop_log_version(name)
             announce = False                       # already posted/known; just upgrade quietly
         elif upgrading:
-            self.skipped.add(name)
+            self._skip(path, name, "kept log version (demo didn't qualify)")
             return None, "kept log version (demo didn't qualify)"
         mid, why = store(self.db, name, mzid, played, summary, players, "demo",
                          self.min_rounds, self.min_team_size, announce=announce)
         if why:
             log.info("skipped %s: %s", name, why)
-            self.skipped.add(name)
+            self._skip(path, name, why)
         else:
             log.info("imported %s as match #%s", name, mid)
             if announce:
@@ -151,9 +168,11 @@ class DemoWatcher:
         while True:
             try:
                 now = loop_time()
+                if self.done is None:
+                    self.done = self.db.demo_keys()
                 for path in self._candidates():
                     name = os.path.basename(path)
-                    if name in self.skipped or self.db.has_demo(name):
+                    if name in self.skipped or name in self.done:
                         continue
                     size = os.path.getsize(path)
                     prev = self.sizes.get(name)
@@ -165,6 +184,8 @@ class DemoWatcher:
                     age = now - os.path.getmtime(path)
                     if (prev and now - prev[1] >= self.stable) or age >= self.stable:
                         await self.process(path, announce=(not first) or backfill_announce)
+                        self.done.add(name)                # imported or skipped: never re-read
+                        await asyncio.sleep(self.pause)    # breathe between demos during a backfill
                 first = False
             except Exception:
                 log.exception("watcher loop error")

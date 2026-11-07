@@ -10,7 +10,8 @@ from .model import MatchData, Round, Kill, Damage, Blind, T, CT, clean_steamid
 from .rating3 import equip_strength
 
 # MatchZy filename: 2026-11-04_20-20-59_3_de_wrecked_team_a_vs_team_b.dem
-MATCHZY_NAME = re.compile(r"^(\d{4}-\d\d-\d\d)_(\d\d-\d\d-\d\d)_(\d+)_(.+?)_team_")
+# With a match setup loaded the team names replace "team_x", so only rely on the prefix.
+MATCHZY_NAME = re.compile(r"^(\d{4}-\d\d-\d\d)_(\d\d-\d\d-\d\d)_(\d+)_")
 
 
 def _df(parser, event, **kw):

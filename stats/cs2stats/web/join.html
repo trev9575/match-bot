@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Join the CS2 server</title>
+<style>
+  :root { --bg: #121212; --card: #1c1c1c; --line: #2d2d2d; --fg: #ececec; --muted: #9b9b9b; --accent: #3b82f6; --code: #232323; --bad: #f87171; }
+  * { box-sizing: border-box; }
+  body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 16px; background: var(--bg); color: var(--fg);
+         font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { width: 100%; max-width: 460px; background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 28px 24px; }
+  h1 { font: 400 26px Georgia, serif; margin: 0 0 6px; text-align: center; }
+  p { margin: 0 0 16px; color: var(--muted); text-align: center; }
+  .button { display: block; text-align: center; padding: 14px 20px; border-radius: 10px; background: var(--accent); color: #fff;
+            font-weight: 700; font-size: 17px; text-decoration: none; }
+  .button:hover { filter: brightness(1.1); }
+  .alt { display: block; text-align: center; margin-top: 12px; color: var(--fg); font-size: 14px; }
+  .box { margin-top: 22px; padding-top: 16px; border-top: 1px solid var(--line); font-size: 13px; color: var(--muted); }
+  .box b { color: var(--fg); font-weight: 600; }
+  .cmd { display: flex; gap: 8px; margin: 6px 0 14px; }
+  code { flex: 1; padding: 9px 11px; border-radius: 6px; background: var(--code); color: var(--fg); font: 13px ui-monospace, Consolas, monospace;
+         overflow-wrap: anywhere; user-select: all; }
+  button.copy { border: 1px solid var(--line); background: transparent; color: var(--muted); border-radius: 6px; padding: 0 10px; cursor: pointer; font: inherit; }
+  button.copy:hover { color: var(--fg); }
+  .err { color: var(--bad); }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <div id="ok" hidden>
+    <h1 id="title">Opening CS2…</h1>
+    <p>If your browser asks, choose <b>Open Steam</b>. CS2 starts if it isn't running, then joins the server.</p>
+    <a id="connect" class="button" href="#">Join server</a>
+    <a id="launch" class="alt" href="#">CS2 didn't open? Launch CS2 and join →</a>
+    <div class="box">
+      <b>Or paste this in the CS2 console</b> (press <b>~</b>):
+      <div class="cmd"><code id="command"></code><button class="copy" data-copy="command">Copy</button></div>
+      <div id="lanbox" hidden>
+        <b>On the server's home network?</b> Use the local address instead:
+        <div class="cmd"><code id="lancommand"></code><button class="copy" data-copy="lancommand">Copy</button></div>
+        <a id="lanlaunch" class="alt" style="text-align:left;margin-top:0" href="#">Launch CS2 and join the local address →</a>
+      </div>
+    </div>
+  </div>
+  <div id="bad" hidden>
+    <h1>Invalid link</h1>
+    <p class="err">This join link is missing the server address. Use the Join button in Discord again.</p>
+  </div>
+</main>
+<script>
+  "use strict";
+  // Link format: /join#ip=host:27015&pw=secret&lan=192.168.0.204:27015
+  // Details stay in the #fragment, so they're never sent to this web server.
+  const params = new URLSearchParams(location.hash.slice(1));
+  const valid = (a) => /^[A-Za-z0-9.-]+:\d{1,5}$/.test(a || "");   // host:port only, nothing else can be opened
+  const address = params.get("ip"), password = params.get("pw") || "", lan = params.get("lan");
+
+  // steam://connect: joins a running CS2, or starts CS2 first if it's closed
+  const connectUrl = (a) => "steam://connect/" + a + (password ? "/" + encodeURIComponent(password) : "");
+  // steam://run with launch options: only works when CS2 is closed, but doesn't need Steam to query the server
+  const launchUrl = (a) => "steam://run/730//" +
+    encodeURIComponent("+connect " + a + (password ? " +password " + password : "")).replace(/%2B/g, "+").replace(/%3A/g, ":");
+  const command = (a) => "connect " + a + (password ? "; password " + password : "");
+
+  if (valid(address)) {
+    document.getElementById("connect").href = connectUrl(address);
+    document.getElementById("launch").href = launchUrl(address);
+    document.getElementById("command").textContent = command(address);
+    if (valid(lan)) {
+      document.getElementById("lancommand").textContent = command(lan);
+      document.getElementById("lanlaunch").href = launchUrl(lan);
+      document.getElementById("lanbox").hidden = false;
+    }
+    document.getElementById("ok").hidden = false;
+    location.href = connectUrl(address);
+
+    // Once focus moves to Steam/CS2, close the tab (browsers only allow this for tabs they opened)
+    let timer = null;
+    window.addEventListener("blur", () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => { window.close(); setTimeout(() => { document.getElementById("title").textContent = "You can close this tab"; }, 300); }, 5000);
+    });
+    window.addEventListener("focus", () => clearTimeout(timer));
+  } else {
+    document.getElementById("bad").hidden = false;
+  }
+
+  document.querySelectorAll("button.copy").forEach((b) => b.addEventListener("click", async () => {
+    try { await navigator.clipboard.writeText(document.getElementById(b.dataset.copy).textContent); b.textContent = "Copied"; }
+    catch (_) { b.textContent = "Select it"; }
+    setTimeout(() => (b.textContent = "Copy"), 1500);
+  }));
+</script>
+</body>
+</html>

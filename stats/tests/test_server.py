@@ -68,3 +68,41 @@ def test_api_flow(tmp_path, monkeypatch):
     with urllib.request.urlopen(base + "/player/" + SIDS[0]) as r:
         assert b"CS2 5v5 Leaderboard" in r.read()
     assert call(base + "/api/players/notanid")[0] == 400
+
+
+def test_elo_fields_and_balancing_lookup(tmp_path, monkeypatch):
+    svc, base = start(tmp_path, monkeypatch)
+    fake_match(svc.db, announce=False)
+    lb = call(base + "/api/leaderboard")[1]["players"]
+    p0 = next(p for p in lb if p["steamid"] == SIDS[0])
+    assert p0["elo"] > 1500 and p0["rank"] == 0 and "Unranked" in p0["rank_name"]   # 1 of 5 placements
+    assert "rating2" not in p0
+    m = call(base + "/api/matches/1")[1]
+    assert all("elo_delta" in p for p in m["players"])
+
+    svc.db.link("42", SIDS[0])
+    code, r = call(base + "/api/discord-ratings", "POST", {"discord_ids": ["42", "99"]}, key="secret")
+    assert code == 200 and list(r["players"]) == ["42"] and r["players"]["42"]["steamid"] == SIDS[0]
+
+
+def test_link_guard_and_join_page(tmp_path, monkeypatch):
+    svc, base = start(tmp_path, monkeypatch)
+    fake_match(svc.db, announce=False)
+    assert call(base + "/api/link", "POST", {"discord_id": "1", "steamid": SIDS[0]}, key="secret")[0] == 200
+    assert call(base + "/api/link", "POST", {"discord_id": "1", "steamid": SIDS[0]}, key="secret")[0] == 200   # same person again
+    code, r = call(base + "/api/link", "POST", {"discord_id": "2", "steamid": SIDS[0]}, key="secret")
+    assert code == 409 and r["discord_id"] == "1"                     # someone else can't take it over
+    with urllib.request.urlopen(base + "/join") as resp:
+        assert b"steam://connect/" in resp.read()
+
+
+def test_admin_force_link_and_links_list(tmp_path, monkeypatch):
+    svc, base = start(tmp_path, monkeypatch)
+    fake_match(svc.db, announce=False)
+    call(base + "/api/link", "POST", {"discord_id": "1", "steamid": SIDS[0]}, key="secret")
+    code, r = call(base + "/api/link", "POST", {"discord_id": "2", "steamid": SIDS[0], "force": True}, key="secret")
+    assert code == 200 and r["replaced_discord_id"] == "1"
+    assert call(base + "/api/links")[0] == 401
+    code, r = call(base + "/api/links", key="secret")
+    linked = {p["steamid"]: p["discord_id"] for p in r["players"]}
+    assert len(r["players"]) == 10 and linked[SIDS[0]] == "2" and linked[SIDS[1]] is None

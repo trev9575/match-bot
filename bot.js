@@ -126,6 +126,10 @@ client.on("interactionCreate", async (interaction) => {
         if (action === "move_players") {
             await match.movePlayers(interaction, client);
         }
+
+        if (action === "randomize") {
+            await match.randomizeTeams(interaction);
+        }
     }
 });
 
