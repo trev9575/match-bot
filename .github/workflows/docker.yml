@@ -29,3 +29,10 @@ jobs:
           context: .
           push: true
           tags: ${{ env.IMAGE }}:latest
+
+      - name: Build and push the stats service
+        uses: docker/build-push-action@v6
+        with:
+          context: ./stats
+          push: true
+          tags: ${{ env.IMAGE }}-stats:latest

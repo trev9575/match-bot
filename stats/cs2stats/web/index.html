@@ -1,0 +1,473 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CS2 5v5 Leaderboard</title>
+<meta name="robots" content="noindex">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%233b82f6'/%3E%3Cpath d='M4 11V7M8 11V4M12 11V8' stroke='white' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E">
+<style>
+  :root {
+    --bg: #121212; --panel: #1c1c1c; --panel-2: #232323; --line: #2d2d2d;
+    --fg: #ececec; --muted: #9b9b9b; --faint: #6d6d6d;
+    --r3: #3b82f6; --r2: #f97316; --good: #4ade80; --bad: #f87171; --gold: #facc15;
+    --team-a: #60a5fa; --team-b: #f59e0b;
+    --radius: 10px; --serif: Georgia, "Times New Roman", serif;
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.45 var(--sans); }
+  a { color: inherit; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  main { max-width: 1280px; margin: 0 auto; padding: 20px 16px 48px; display: flex; flex-direction: column; gap: 16px; }
+  .top { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+  .brand { font-family: var(--serif); font-size: 28px; font-weight: 400; margin: 0; }
+  .crumb { color: var(--muted); font-size: 13px; }
+  .take { color: var(--muted); margin: 4px 0 0; }
+  .take b { color: var(--fg); }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px; min-width: 0; }
+  .tile-label { font-size: 12px; color: var(--muted); }
+  .tile-num { font-family: var(--serif); font-size: 26px; margin-top: 4px; font-variant-numeric: tabular-nums; }
+  .tile-sub { font-size: 12px; color: var(--muted); margin-top: 2px; }
+  h2 { font-size: 16px; font-weight: 600; margin: 0; }
+  .note { font-size: 12px; color: var(--muted); margin: 4px 0 12px; }
+  .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr)); gap: 16px; }
+  .controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 12px; }
+  .tabs { display: flex; flex-wrap: wrap; gap: 4px; }
+  .tab, select, input[type=search] { font: inherit; font-size: 12px; padding: 5px 10px; border-radius: 6px; border: 1px solid var(--line); background: transparent; color: var(--muted); }
+  .tab { cursor: pointer; }
+  .tab[aria-selected=true] { background: var(--fg); color: var(--bg); border-color: var(--fg); }
+  select, input[type=search] { background: var(--bg); color: var(--fg); }
+  input[type=search] { min-width: 180px; }
+  label.check { font-size: 12px; color: var(--muted); display: flex; gap: 6px; align-items: center; }
+  .scroll { overflow: auto; max-height: 640px; }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; font-variant-numeric: tabular-nums; }
+  th { position: sticky; top: 0; background: var(--panel); text-align: right; font-weight: 500; color: var(--muted); padding: 7px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; cursor: pointer; user-select: none; z-index: 1; }
+  th.nosort { cursor: default; }
+  th[aria-sort=descending]::after { content: " ↓"; }
+  th[aria-sort=ascending]::after { content: " ↑"; }
+  td { text-align: right; padding: 7px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  th.l, td.l { text-align: left; }
+  td.b { font-weight: 600; }
+  td.good, span.good { color: var(--good); }
+  td.bad, span.bad { color: var(--bad); }
+  tr.few td { opacity: .55; }
+  tr.click { cursor: pointer; }
+  tr.click:hover td { background: var(--panel-2); }
+  th.stick, td.stick { position: sticky; left: 0; background: var(--panel); z-index: 2; }
+  th.stick { z-index: 3; }
+  tr.click:hover td.stick { background: var(--panel-2); }
+  .pname { font-weight: 600; }
+  .tag { display: inline-block; font-size: 10px; padding: 1px 5px; border-radius: 4px; border: 1px solid var(--line); color: var(--muted); margin-left: 6px; vertical-align: 1px; font-weight: 500; }
+  .wl { display: inline-block; width: 20px; text-align: center; border-radius: 4px; font-weight: 600; font-size: 12px; }
+  .wl.W { background: rgba(74,222,128,.15); color: var(--good); }
+  .wl.L { background: rgba(248,113,113,.15); color: var(--bad); }
+  .wl.T { background: rgba(155,155,155,.15); color: var(--muted); }
+  .legend { display: flex; gap: 14px; font-size: 12px; color: var(--muted); margin-bottom: 8px; }
+  .sw { display: inline-block; width: 11px; height: 11px; border-radius: 2px; vertical-align: -1px; margin-right: 5px; }
+  .sw.dot { border-radius: 50%; border: 2px solid var(--r2); background: transparent; }
+  svg text { font-family: var(--sans); }
+  .bars { display: flex; flex-direction: column; gap: 10px; }
+  .bar-row { display: grid; grid-template-columns: 90px 1fr 36px; gap: 10px; align-items: center; font-size: 13px; }
+  .bar-track { height: 8px; background: var(--panel-2); border-radius: 4px; overflow: hidden; }
+  .bar-fill { height: 100%; border-radius: 4px; background: var(--r3); }
+  .bar-val { text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); }
+  .hero { display: flex; gap: 24px; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; }
+  .hero h1 { font-family: var(--serif); font-weight: 400; font-size: 34px; margin: 0; }
+  .hero .meta { color: var(--muted); margin-top: 4px; }
+  .big-rating { text-align: right; }
+  .big-rating .n { font-family: var(--serif); font-size: 44px; line-height: 1; }
+  .big-rating .l { font-size: 12px; color: var(--muted); }
+  .rounds { display: flex; flex-wrap: wrap; gap: 3px; margin-top: 4px; }
+  .rd { width: 22px; height: 22px; border-radius: 4px; font-size: 10px; display: grid; place-items: center; color: #111; font-weight: 700; }
+  .rd.A { background: var(--team-a); } .rd.B { background: var(--team-b); } .rd.x { background: var(--line); color: var(--muted); }
+  .rd.half { margin-left: 10px; }
+  .hl { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; }
+  .hl .card { padding: 12px; }
+  .hl .t { font-size: 12px; color: var(--muted); }
+  .hl .p { font-weight: 600; margin-top: 2px; }
+  .hl .x { font-size: 12px; color: var(--muted); }
+  .score { font-family: var(--serif); font-size: 40px; display: flex; gap: 14px; align-items: center; }
+  .score .a { color: var(--team-a); } .score .b { color: var(--team-b); }
+  .teamhead { display: flex; justify-content: space-between; align-items: baseline; margin: 4px 0 8px; }
+  .teamhead h2 .dotA, .teamhead h2 .dotB { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 8px; }
+  .dotA { background: var(--team-a); } .dotB { background: var(--team-b); }
+  details { font-size: 13px; color: var(--muted); }
+  details summary { cursor: pointer; color: var(--fg); }
+  details dl { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; }
+  details dt { color: var(--fg); font-weight: 500; }
+  details dd { margin: 0; }
+  .empty { color: var(--muted); padding: 24px 0; text-align: center; }
+  .err { color: var(--bad); }
+  .pager { display: flex; justify-content: center; gap: 8px; margin-top: 10px; }
+  footer { color: var(--faint); font-size: 12px; text-align: center; }
+  @media (max-width: 600px) { .brand { font-size: 22px; } .hero h1 { font-size: 26px; } .tile-num { font-size: 22px; } }
+</style>
+</head>
+<body>
+<main id="app"><div class="empty">Loading…</div></main>
+<script>
+"use strict";
+// ---------------------------------------------------------------- utilities
+const $app = document.getElementById("app");
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
+const num = (v) => (v == null || isNaN(v) ? 0 : Number(v));
+const f0 = (v) => num(v).toFixed(0), f1 = (v) => num(v).toFixed(1), f2 = (v) => num(v).toFixed(2);
+const pct = (v) => num(v).toFixed(0) + "%";
+const sgn = (v, d = 2) => (num(v) >= 0 ? "+" : "−") + Math.abs(num(v)).toFixed(d) + "%";
+const mapName = (m) => (m || "?").replace(/^de_/, "").replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+const fmtDate = (iso, withTime) => {
+  if (!iso) return "";
+  const d = new Date(iso);
+  const o = withTime ? {month: "short", day: "numeric", hour: "numeric", minute: "2-digit"} : {month: "short", day: "numeric", year: "numeric"};
+  return d.toLocaleString(undefined, o);
+};
+async function api(path) {
+  const r = await fetch("/api/" + path);
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.statusText);
+  return r.json();
+}
+function go(path) { history.pushState(null, "", path); route(); }
+document.addEventListener("click", (e) => {
+  const a = e.target.closest("a[data-nav]");
+  if (a && !e.metaKey && !e.ctrlKey && e.button === 0) { e.preventDefault(); go(a.getAttribute("href")); return; }
+  const tr = e.target.closest("tr[data-href]");
+  if (tr && !e.target.closest("a")) go(tr.dataset.href);
+});
+window.addEventListener("popstate", route);
+const pLink = (sid, name) => `<a data-nav href="/player/${esc(sid)}">${esc(name)}</a>`;
+const ratingCls = (v) => (num(v) >= 1.1 ? "good" : num(v) < 0.9 ? "bad" : "");
+const kindTag = (r) => (r.rating_kind === "2.0" ? `<span class="tag" title="Played only before Rating 3.0 data was recorded; showing Rating 2.0">2.0</span>` : "");
+
+// ---------------------------------------------------------------- sortable tables
+// cols: [{k, label, fmt(row) -> html, cls, left, sort(row) -> value, nosort, title}]
+function table(id, cols, rows, opts = {}) {
+  const st = (table.state[id] ||= {k: opts.sortKey, dir: opts.dir || "desc"});
+  const col = cols.find((c) => c.k === st.k);
+  if (col && !col.nosort) {
+    const val = col.sort || ((r) => r[col.k]);
+    rows = [...rows].sort((a, b) => {
+      const x = val(a), y = val(b);
+      const c = typeof x === "string" ? String(x).localeCompare(String(y)) : num(x) - num(y);
+      return st.dir === "asc" ? c : -c;
+    });
+  }
+  const head = cols.map((c) => `<th data-k="${c.k}" class="${c.left ? "l" : ""} ${c.stick ? "stick" : ""} ${c.nosort ? "nosort" : ""}"
+      ${c.title ? `title="${esc(c.title)}"` : ""} ${st.k === c.k ? `aria-sort="${st.dir === "asc" ? "ascending" : "descending"}"` : ""}>${c.label}</th>`).join("");
+  const body = rows.map((r) => `<tr class="${opts.rowCls ? opts.rowCls(r) : ""} ${opts.href ? "click" : ""}" ${opts.href ? `data-href="${esc(opts.href(r))}"` : ""}>` +
+    cols.map((c) => `<td class="${c.left ? "l" : ""} ${c.stick ? "stick" : ""} ${typeof c.cls === "function" ? c.cls(r) : c.cls || ""}">${c.fmt ? c.fmt(r) : esc(r[c.k])}</td>`).join("") + "</tr>").join("");
+  const html = `<table data-tid="${id}"><thead><tr>${head}</tr></thead><tbody>${body || `<tr><td colspan="${cols.length}" class="l empty">Nothing here yet.</td></tr>`}</tbody></table>`;
+  return html;
+}
+table.state = {};
+document.addEventListener("click", (e) => {
+  const th = e.target.closest("th[data-k]");
+  if (!th || th.classList.contains("nosort")) return;
+  const id = th.closest("table").dataset.tid, st = table.state[id];
+  st.dir = st.k === th.dataset.k && st.dir === "desc" ? "asc" : "desc";
+  st.k = th.dataset.k;
+  (table.onSort[id] || (() => {}))();
+});
+table.onSort = {};
+
+// ---------------------------------------------------------------- leaderboard page
+const LB = {view: "overview", q: "", min2: false, period: "all", map: ""};
+const NAME_COL = {k: "name", label: "Player", left: true, stick: true, fmt: (r) => `<span class="pname">${pLink(r.steamid, r.name)}</span>${kindTag(r)}`, sort: (r) => r.name.toLowerCase()};
+const VIEWS = {
+  overview: {label: "Overview", cols: [NAME_COL,
+    {k: "matches", label: "M"}, {k: "wins", label: "W"}, {k: "losses", label: "L"},
+    {k: "rating", label: "Rating 3.0", fmt: (r) => f2(r.rating), cls: "b", title: "Rating 3.0 (falls back to 2.0 if tagged)"},
+    {k: "rating2", label: "Rating 2.0", fmt: (r) => f2(r.rating2)},
+    {k: "swing_pr", label: "Swing", fmt: (r) => (r.rating_kind === "2.0" ? "–" : sgn(r.swing_pr)), cls: (r) => (r.rating_kind === "2.0" ? "" : num(r.swing_pr) >= 0 ? "good" : "bad"), title: "Average change in your team's round-win chance per round"},
+    {k: "kills", label: "K"}, {k: "deaths", label: "D"}, {k: "assists", label: "A"},
+    {k: "kd", label: "K/D", fmt: (r) => f2(r.kd)}, {k: "adr", label: "ADR", fmt: (r) => f1(r.adr)},
+    {k: "kast", label: "KAST", fmt: (r) => pct(r.kast)}, {k: "hs_pct", label: "HS", fmt: (r) => pct(r.hs_pct)}]},
+  duels: {label: "Duels & clutches", cols: [NAME_COL,
+    {k: "entry_wins", label: "Opening wins"}, {k: "entry_attempts", label: "Opening duels"},
+    {k: "entry_win_pct", label: "Opening win", fmt: (r) => pct(r.entry_win_pct)},
+    {k: "trade_kills", label: "Trade kills"}, {k: "traded_pct", label: "Deaths traded", fmt: (r) => pct(r.traded_pct)},
+    {k: "clutch_wins", label: "Clutches won"}, {k: "clutch_attempts", label: "Clutch attempts"},
+    {k: "k2", label: "2K"}, {k: "k3", label: "3K"}, {k: "k4", label: "4K"}, {k: "k5", label: "5K"}, {k: "aces", label: "Aces"}]},
+  utility: {label: "Utility", cols: [NAME_COL,
+    {k: "util_damage", label: "Utility damage"}, {k: "util_adr", label: "Utility dmg / round", fmt: (r) => f1(r.util_adr)},
+    {k: "enemies_flashed", label: "Enemies flashed"}, {k: "flash_assists", label: "Flash assists"},
+    {k: "team_flashed", label: "Teammates flashed"}]},
+  rating: {label: "Rating 3.0 breakdown", note: "Each sub-rating is scaled so 1.00 is the group average. Weights: Swing 33%, Kills 25%, Survival 14%, KAST 12%, Damage 11%, Multi-kill 5%.", cols: [NAME_COL,
+    {k: "rating", label: "Rating 3.0", fmt: (r) => f2(r.rating), cls: "b"},
+    ...["swing", "kills", "survival", "kast", "damage", "multikill"].map((k) => ({k: "sub_" + k, label: {swing: "Swing", kills: "Kills", survival: "Survival", kast: "KAST", damage: "Damage", multikill: "Multi-kill"}[k],
+      fmt: (r) => (r["sub_" + k] == null ? "–" : f2(r["sub_" + k])), cls: (r) => ratingCls(r["sub_" + k])}))]},
+  profile: {label: "Profiles", note: "Percentile within the group, 0–100: 50 is the middle of the group.", cols: [NAME_COL,
+    ...["firepower", "entrying", "trading", "clutching", "utility"].map((k) => ({k, label: k[0].toUpperCase() + k.slice(1), fmt: (r) => f0(r[k])}))]},
+};
+
+async function pageHome() {
+  const [sum, lb, ms] = await Promise.all([api("summary"), api(`leaderboard?period=${LB.period}&map=${encodeURIComponent(LB.map)}`), api("matches?limit=15")]);
+  const players = lb.players, minM = lb.min_matches;
+  document.title = "CS2 5v5 Leaderboard";
+  const leader = sum.leader;
+  $app.innerHTML = `
+    <div class="top"><div>
+      <h1 class="brand">CS2 5v5 Leaderboard</h1>
+      <p class="take">${leader ? `<b>${esc(leader.name)}</b> leads the group with a <b>${f2(leader.rating)}</b> rating. ` : ""}Ratings are relative to this group: 1.00 is the average player in our games.</p>
+    </div></div>
+    <div class="tiles">
+      <div class="card"><div class="tile-label">Matches</div><div class="tile-num">${sum.matches}</div><div class="tile-sub">${sum.first_played ? "Competitive maps since " + fmtDate(sum.first_played) : "No matches yet"}</div></div>
+      <div class="card"><div class="tile-label">Rounds played</div><div class="tile-num">${sum.rounds}</div><div class="tile-sub">Live rounds only, no warmup</div></div>
+      <div class="card"><div class="tile-label">Players</div><div class="tile-num">${sum.players}</div><div class="tile-sub">Everyone who played a map</div></div>
+      <div class="card"><div class="tile-label">Most kills</div><div class="tile-num">${sum.top_killer ? sum.top_killer.kills : "–"}</div><div class="tile-sub">${sum.top_killer ? pLink(sum.top_killer.steamid, sum.top_killer.name) : ""}</div></div>
+    </div>
+    <section class="card">
+      <h2>Leaderboard</h2>
+      <p class="note">Click a player for their profile and match history. Click a column to sort. Faded rows have fewer than ${minM} matches.</p>
+      <div class="controls">
+        <div class="tabs" role="tablist">${Object.entries(VIEWS).map(([k, v]) => `<button class="tab" role="tab" data-view="${k}" aria-selected="${LB.view === k}">${v.label}</button>`).join("")}</div>
+        <input type="search" id="q" placeholder="Search players" value="${esc(LB.q)}" aria-label="Search players">
+        <select id="period" aria-label="Time period">${[["all", "All time"], ["30", "Last 30 days"], ["7", "Last 7 days"]].map(([v, l]) => `<option value="${v}" ${LB.period === v ? "selected" : ""}>${l}</option>`).join("")}</select>
+        <select id="map" aria-label="Map"><option value="">All maps</option>${sum.maps.map((m) => `<option value="${esc(m)}" ${LB.map === m ? "selected" : ""}>${esc(mapName(m))}</option>`).join("")}</select>
+        <label class="check"><input type="checkbox" id="min2" ${LB.min2 ? "checked" : ""}> ${minM}+ matches only</label>
+      </div>
+      <p class="note" id="viewnote" ${VIEWS[LB.view].note ? "" : "hidden"}>${esc(VIEWS[LB.view].note || "")}</p>
+      <div class="scroll" id="lbtable"></div>
+    </section>
+    <div class="grid2">
+      <section class="card"><h2>Rating by player</h2>
+        <p class="note">Bars are Rating 3.0; dots show the old Rating 2.0. The dashed line marks the group average (1.00).</p>
+        <div class="legend"><span><span class="sw" style="background:var(--r3)"></span>Rating 3.0</span><span><span class="sw dot"></span>Rating 2.0</span></div>
+        <div id="chart" style="overflow-x:auto"></div></section>
+      <section class="card"><h2>Category leaders</h2><p class="note">Among players with ${minM}+ matches.</p><div id="leaders" class="scroll"></div></section>
+    </div>
+    <section class="card"><h2>Recent matches</h2><p class="note">Click a match for the full scorecard.</p><div class="scroll" id="matches"></div>
+      <div class="pager"><button class="tab" id="more" ${ms.total > ms.matches.length ? "" : "hidden"}>Show more</button></div></section>
+    ${explainer()}
+    <footer>Stats from MatchZy demos on our server · updated ${sum.last_played ? fmtDate(sum.last_played, true) : "never"}</footer>`;
+
+  const filtered = () => players.filter((r) => (!LB.min2 || r.matches >= minM) && (!LB.q || r.name.toLowerCase().includes(LB.q.toLowerCase())));
+  const drawTable = () => {
+    const v = VIEWS[LB.view];
+    table.onSort.lb = drawTable;
+    document.getElementById("lbtable").innerHTML = table("lb", v.cols, filtered(),
+      {sortKey: "rating", rowCls: (r) => (r.matches < minM ? "few click" : ""), href: (r) => "/player/" + r.steamid});
+  };
+  drawTable();
+  $app.querySelectorAll(".tab[data-view]").forEach((b) => b.addEventListener("click", () => {
+    LB.view = b.dataset.view;
+    $app.querySelectorAll(".tab[data-view]").forEach((x) => x.setAttribute("aria-selected", x === b));
+    const n = document.getElementById("viewnote"); n.textContent = VIEWS[LB.view].note || ""; n.hidden = !VIEWS[LB.view].note;
+    drawTable();
+  }));
+  document.getElementById("q").addEventListener("input", (e) => { LB.q = e.target.value; drawTable(); });
+  document.getElementById("min2").addEventListener("change", (e) => { LB.min2 = e.target.checked; drawTable(); });
+  document.getElementById("period").addEventListener("change", (e) => { LB.period = e.target.value; route(); });
+  document.getElementById("map").addEventListener("change", (e) => { LB.map = e.target.value; route(); });
+
+  document.getElementById("chart").innerHTML = ratingChart(players);
+  document.getElementById("leaders").innerHTML = leaders(players.filter((r) => r.matches >= minM));
+
+  let shown = ms.matches;
+  const drawMatches = () => { table.onSort.ms = drawMatches; document.getElementById("matches").innerHTML = matchList(shown); };
+  drawMatches();
+  document.getElementById("more").addEventListener("click", async (e) => {
+    const more = await api(`matches?limit=25&offset=${shown.length}`);
+    shown = shown.concat(more.matches); drawMatches();
+    e.target.hidden = shown.length >= more.total;
+  });
+}
+
+function matchList(ms) {
+  return table("ms", [
+    {k: "played_at", label: "Date", left: true, fmt: (m) => fmtDate(m.played_at, true)},
+    {k: "map", label: "Map", left: true, fmt: (m) => `<b>${esc(mapName(m.map))}</b>`},
+    {k: "team_a_name", label: "Team", left: true, fmt: (m) => esc(m.team_a_name || "Team A")},
+    {k: "score", label: "Score", nosort: true, fmt: (m) => `<b>${m.score_a} : ${m.score_b}</b>`},
+    {k: "team_b_name", label: "Team", left: true, fmt: (m) => esc(m.team_b_name || "Team B")},
+    {k: "rounds", label: "Rounds"},
+    {k: "source", label: "Source", left: true, fmt: (m) => (m.source === "demo" ? "Demo" : "Server log")},
+  ], ms, {sortKey: "played_at", href: (m) => "/match/" + m.id});
+}
+
+function ratingChart(rows) {
+  rows = [...rows].sort((a, b) => num(b.rating) - num(a.rating));
+  if (!rows.length) return `<div class="empty">No players yet.</div>`;
+  const rowH = 24, left = 130, right = 46, W = 640, H = rows.length * rowH + 24;
+  const max = Math.max(1.5, ...rows.map((r) => Math.max(num(r.rating), num(r.rating2)))) * 1.05;
+  const x = (v) => left + (W - left - right) * (Math.max(0, num(v)) / max);
+  let s = `<svg viewBox="0 0 ${W} ${H}" width="100%" style="min-width:520px" role="img" aria-label="Rating by player">`;
+  for (let t = 0; t <= max; t += 0.5) s += `<line x1="${x(t)}" x2="${x(t)}" y1="0" y2="${H - 18}" stroke="var(--line)"/><text x="${x(t)}" y="${H - 4}" fill="var(--faint)" font-size="11" text-anchor="middle">${t.toFixed(1)}</text>`;
+  rows.forEach((r, i) => {
+    const y = i * rowH + 4, cy = y + 9;
+    s += `<a href="/player/${esc(r.steamid)}" data-nav><text x="${left - 8}" y="${cy}" dy="0.35em" text-anchor="end" fill="var(--fg)" font-size="12">${esc(r.name.length > 16 ? r.name.slice(0, 15) + "…" : r.name)}</text></a>`;
+    s += `<rect x="${left}" y="${y}" width="${Math.max(1, x(r.rating) - left)}" height="18" rx="3" fill="var(--r3)" opacity="${r.rating_kind === "2.0" ? 0.45 : 1}"><title>${esc(r.name)}: ${f2(r.rating)}</title></rect>`;
+    if (x(r.rating) - left > 34) s += `<text x="${left + 6}" y="${cy}" dy="0.35em" fill="#fff" font-size="11" font-weight="600">${f2(r.rating)}</text>`;
+    s += `<circle cx="${x(r.rating2)}" cy="${cy}" r="4.5" fill="var(--panel)" stroke="var(--r2)" stroke-width="2"><title>Rating 2.0: ${f2(r.rating2)}</title></circle>`;
+    s += `<text x="${x(r.rating2) + 8}" y="${cy}" dy="0.35em" fill="var(--r2)" font-size="11" stroke="var(--panel)" stroke-width="3" paint-order="stroke">${f2(r.rating2)}</text>`;
+  });
+  s += `<line x1="${x(1)}" x2="${x(1)}" y1="0" y2="${H - 18}" stroke="var(--muted)" stroke-dasharray="3 3"/></svg>`;
+  return s;
+}
+
+function leaders(rows) {
+  if (!rows.length) return `<div class="empty">Nobody has enough matches yet.</div>`;
+  const cats = [
+    ["Rating", "rating", (r) => f2(r.rating)], ...(rows.some((r) => r.rating_kind === "3.0") ? [["Round swing", "swing_pr", (r) => sgn(r.swing_pr) + " / round"]] : []),
+    ["Most kills", "kills", (r) => r.kills + " kills"], ["ADR", "adr", (r) => f1(r.adr)],
+    ["KAST", "kast", (r) => pct(r.kast)], ["Headshot %", "hs_pct", (r) => pct(r.hs_pct)],
+    ["Opening duels", "entry_wins", (r) => `${r.entry_wins}/${r.entry_attempts} won`],
+    ["Trade kills", "trade_kills", (r) => r.trade_kills + " trades"],
+    ["Clutches won", "clutch_wins", (r) => `${r.clutch_wins} of ${r.clutch_attempts}`],
+    ["Utility damage", "util_damage", (r) => r.util_damage + " dmg"],
+    ["Enemies flashed", "enemies_flashed", (r) => r.enemies_flashed + " blinded"],
+    ["Teammates flashed 🙃", "team_flashed", (r) => r.team_flashed + "×"],
+  ];
+  return `<table><thead><tr><th class="l nosort">Category</th><th class="l nosort">Player</th><th class="nosort">Value</th></tr></thead><tbody>` +
+    cats.map(([label, k, fmt]) => { const r = rows.reduce((a, b) => (num(b[k]) > num(a[k]) ? b : a)); return `<tr><td class="l">${label}</td><td class="l pname">${pLink(r.steamid, r.name)}</td><td>${fmt(r)}</td></tr>`; }).join("") +
+    `</tbody></table>`;
+}
+
+function explainer() {
+  return `<details class="card"><summary>How the stats work</summary><dl>
+    <dt>Rating 3.0</dt><dd>Our approximation of HLTV Rating 3.0: Swing 33%, Kills 25%, Survival 14%, KAST 12%, Damage 11%, Multi-kills 5%. Kills, deaths and damage are eco-adjusted, so a rifle killing a pistol counts less. 1.00 is the average player in our games.</dd>
+    <dt>Round swing</dt><dd>How much your actions changed your team's chance of winning the round, averaged per round. Kills after the round is decided don't count.</dd>
+    <dt>Rating 2.0</dt><dd>The older, public HLTV 2.0 formula, kept for comparison. Players tagged <span class="tag">2.0</span> only have games from before Rating 3.0 data was recorded.</dd>
+    <dt>ADR</dt><dd>Damage to enemies per round, capped at their remaining HP.</dd>
+    <dt>KAST</dt><dd>% of rounds with a kill, assist, survival, or a death your team traded.</dd>
+    <dt>Opening duel</dt><dd>The first kill of a round. It counts for both the killer and the player who died.</dd>
+    <dt>Trade</dt><dd>Killing the enemy who killed your teammate within 5 seconds.</dd>
+    <dt>Clutch</dt><dd>Last player alive on your side against at least one enemy.</dd>
+    <dt>Profiles</dt><dd>Firepower, Entrying, Trading, Clutching and Utility are 0–100 percentiles within the group.</dd>
+    <dt>What counts</dt><dd>Only finished competitive maps: no warmup, knife rounds, retakes, wingman or deathmatch.</dd>
+  </dl></details>`;
+}
+
+// ---------------------------------------------------------------- player page
+async function pagePlayer(sid) {
+  const d = await api("players/" + sid);
+  const p = d.player, h = d.history;
+  document.title = `${p.name} · CS2 5v5`;
+  const cats = ["firepower", "entrying", "trading", "clutching", "utility"];
+  const subs = ["swing", "kills", "survival", "kast", "damage", "multikill"];
+  const subLabel = {swing: "Swing", kills: "Kills", survival: "Survival", kast: "KAST", damage: "Damage", multikill: "Multi-kill"};
+  const tiles = [
+    ["K/D", f2(p.kd), `${p.kills}-${p.deaths}-${p.assists}`], ["ADR", f1(p.adr), "damage / round"],
+    ["KAST", pct(p.kast), "rounds with impact"], ["Swing", p.rating_kind === "2.0" ? "–" : sgn(p.swing_pr), "win chance / round"],
+    ["Headshots", pct(p.hs_pct), `${p.hs_kills} HS kills`], ["Opening duels", pct(p.entry_win_pct), `${p.entry_wins}/${p.entry_attempts} won`],
+    ["Clutches", `${p.clutch_wins}/${p.clutch_attempts}`, `${p.aces} aces · ${p.k4} 4Ks`], ["Utility dmg", f1(p.util_adr), "per round"],
+  ];
+  $app.innerHTML = `
+    <div class="crumb"><a data-nav href="/">← Leaderboard</a></div>
+    <section class="card hero">
+      <div><h1>${esc(p.name)}</h1>
+        <div class="meta">#${p.rank} of ${d.group_size} · ${p.matches} matches · ${p.wins}W–${p.losses}L (${pct(100 * p.wins / Math.max(p.matches, 1))}) · ${p.rounds} rounds
+        · <a href="https://steamcommunity.com/profiles/${esc(p.steamid)}" target="_blank" rel="noopener">Steam profile ↗</a></div></div>
+      <div class="big-rating"><div class="n">${f2(p.rating)}</div><div class="l">${p.rating_kind === "2.0" ? "Rating 2.0 (no 3.0 data yet)" : "Rating 3.0 · old 2.0: " + f2(p.rating2)}</div></div>
+    </section>
+    <div class="tiles">${tiles.map(([l, n, s]) => `<div class="card"><div class="tile-label">${l}</div><div class="tile-num">${n}</div><div class="tile-sub">${s}</div></div>`).join("")}</div>
+    <div class="grid2">
+      <section class="card"><h2>Profile</h2><p class="note">Percentile within the group: 50 is the middle.</p>
+        <div class="bars">${cats.map((k) => `<div class="bar-row"><span>${k[0].toUpperCase() + k.slice(1)}</span><div class="bar-track"><div class="bar-fill" style="width:${num(p[k])}%"></div></div><span class="bar-val">${f0(p[k])}</span></div>`).join("")}</div></section>
+      <section class="card"><h2>Rating 3.0 breakdown</h2><p class="note">1.00 is the group average for each part.</p>
+        ${p.rating_kind === "2.0" ? `<div class="empty">No Rating 3.0 data for these games yet.</div>` :
+          `<div class="bars">${subs.map((k) => { const v = num(p["sub_" + k]); return `<div class="bar-row"><span>${subLabel[k]}</span><div class="bar-track"><div class="bar-fill" style="width:${Math.min(100, (v / 2) * 100)}%;background:${v >= 1 ? "var(--r3)" : "var(--faint)"}"></div></div><span class="bar-val">${f2(v)}</span></div>`; }).join("")}</div>`}</section>
+    </div>
+    <section class="card"><h2>Rating over time</h2><p class="note">Each dot is one match, oldest on the left.</p>${trend(h)}</section>
+    <section class="card"><h2>Matches</h2><p class="note">Click a match for the full scorecard.</p><div class="scroll" id="hist"></div></section>
+    <section class="card"><h2>By map</h2><div class="scroll" id="maps"></div></section>`;
+  const drawHist = () => {
+    table.onSort.hist = drawHist;
+    document.getElementById("hist").innerHTML = table("hist", [
+      {k: "played_at", label: "Date", left: true, fmt: (r) => fmtDate(r.played_at, true)},
+      {k: "map", label: "Map", left: true, fmt: (r) => `<b>${esc(mapName(r.map))}</b>`},
+      {k: "result", label: "", left: true, fmt: (r) => `<span class="wl ${esc(r.result)}">${esc(r.result)}</span>`},
+      {k: "score", label: "Score", nosort: true, fmt: (r) => { const [m, t] = r.team === "A" ? [r.score_a, r.score_b] : [r.score_b, r.score_a]; return `${m} : ${t}`; }},
+      {k: "kills", label: "K"}, {k: "deaths", label: "D"}, {k: "assists", label: "A"},
+      {k: "adr", label: "ADR", fmt: (r) => f0(r.damage / Math.max(r.rounds, 1)), sort: (r) => r.damage / Math.max(r.rounds, 1)},
+      {k: "kast", label: "KAST", fmt: (r) => pct((100 * r.kast_rounds) / Math.max(r.rounds, 1)), sort: (r) => r.kast_rounds / Math.max(r.rounds, 1)},
+      {k: "hs", label: "HS", fmt: (r) => pct((100 * r.hs_kills) / Math.max(r.kills, 1)), sort: (r) => r.hs_kills / Math.max(r.kills, 1)},
+      {k: "swing_pr", label: "Swing", fmt: (r) => (r.rating_kind === "2.0" ? "–" : sgn(r.swing_pr)), cls: (r) => (r.rating_kind === "2.0" ? "" : num(r.swing_pr) >= 0 ? "good" : "bad")},
+      {k: "rating", label: "Rating", fmt: (r) => f2(r.rating) + kindTag(r), cls: (r) => "b " + ratingCls(r.rating)},
+    ], h, {sortKey: "played_at", href: (r) => "/match/" + r.match_id});
+  };
+  drawHist();
+  const drawMaps = () => {
+    table.onSort.maps = drawMaps;
+    document.getElementById("maps").innerHTML = table("maps", [
+      {k: "map", label: "Map", left: true, fmt: (r) => `<b>${esc(mapName(r.map))}</b>`},
+      {k: "matches", label: "M"}, {k: "wins", label: "W"}, {k: "losses", label: "L"},
+      {k: "rating", label: "Rating", fmt: (r) => f2(r.rating), cls: "b"},
+      {k: "kd", label: "K/D", fmt: (r) => f2(r.kd)}, {k: "adr", label: "ADR", fmt: (r) => f1(r.adr)}, {k: "kast", label: "KAST", fmt: (r) => pct(r.kast)},
+    ], d.maps, {sortKey: "matches"});
+  };
+  drawMaps();
+}
+
+function trend(h) {
+  const pts = [...h].reverse();
+  if (pts.length < 2) return `<div class="empty">Needs at least two matches.</div>`;
+  const W = 1000, H = 200, pad = 28;
+  const vals = pts.map((p) => num(p.rating));
+  const lo = Math.min(0.4, ...vals) - 0.1, hi = Math.max(1.6, ...vals) + 0.1;
+  const x = (i) => pad + ((W - 2 * pad) * i) / (pts.length - 1), y = (v) => H - pad - ((H - 2 * pad) * (v - lo)) / (hi - lo);
+  let s = `<svg viewBox="0 0 ${W} ${H}" width="100%" style="max-height:240px" role="img" aria-label="Rating over time">`;
+  s += `<line x1="${pad}" x2="${W - pad}" y1="${y(1)}" y2="${y(1)}" stroke="var(--muted)" stroke-dasharray="3 3"/><text x="4" y="${y(1)}" dy="0.35em" fill="var(--faint)" font-size="10">1.00</text>`;
+  s += `<polyline fill="none" stroke="var(--r3)" stroke-width="2" points="${pts.map((p, i) => `${x(i)},${y(num(p.rating))}`).join(" ")}"/>`;
+  pts.forEach((p, i) => { s += `<a href="/match/${p.match_id}" data-nav><circle cx="${x(i)}" cy="${y(num(p.rating))}" r="5" fill="${p.result === "W" ? "var(--good)" : p.result === "L" ? "var(--bad)" : "var(--muted)"}" stroke="var(--panel)" stroke-width="2"><title>${esc(mapName(p.map))} ${fmtDate(p.played_at)} · ${f2(p.rating)} (${p.result})</title></circle></a>`; });
+  return s + `</svg>`;
+}
+
+// ---------------------------------------------------------------- match page
+async function pageMatch(id) {
+  const d = await api("matches/" + id);
+  const m = d.match, ps = d.players;
+  const ta = m.team_a_name || "Team A", tb = m.team_b_name || "Team B";
+  document.title = `${mapName(m.map)} ${m.score_a}:${m.score_b} · CS2 5v5`;
+  const log = m.round_log || "";
+  const half = m.rounds >= 24 ? 12 : m.rounds >= 16 ? 8 : 12;   // MR12 (or MR8 short) halftime
+  const rounds = log ? [...log].map((c, i) => `<div class="rd ${c === "-" ? "x" : c.toUpperCase()} ${i === half ? "half" : ""}" title="Round ${i + 1}: ${c === "-" ? "?" : (c.toUpperCase() === "A" ? ta : tb) + (c === c.toLowerCase() && c !== "-" ? " (T side)" : " (CT side)")}">${i + 1}</div>`).join("") : "";
+  const cols = [
+    {k: "name", label: "Player", left: true, stick: true, fmt: (r) => `<span class="pname">${pLink(r.steamid, r.name)}</span>`, sort: (r) => r.name.toLowerCase()},
+    {k: "kills", label: "K"}, {k: "deaths", label: "D"}, {k: "assists", label: "A"},
+    {k: "pm", label: "+/−", fmt: (r) => { const v = r.kills - r.deaths; return `<span class="${v > 0 ? "good" : v < 0 ? "bad" : ""}">${v > 0 ? "+" : ""}${v}</span>`; }, sort: (r) => r.kills - r.deaths},
+    {k: "adr", label: "ADR", fmt: (r) => f0(r.damage / Math.max(r.rounds, 1)), sort: (r) => r.damage},
+    {k: "kast", label: "KAST", fmt: (r) => pct((100 * r.kast_rounds) / Math.max(r.rounds, 1)), sort: (r) => r.kast_rounds},
+    {k: "hs", label: "HS", fmt: (r) => pct((100 * r.hs_kills) / Math.max(r.kills, 1)), sort: (r) => r.hs_kills / Math.max(r.kills, 1)},
+    {k: "entry", label: "Opening", fmt: (r) => `${r.entry_wins}/${r.entry_attempts}`, sort: (r) => r.entry_wins},
+    {k: "trade_kills", label: "Trades"},
+    {k: "clutch", label: "Clutch", fmt: (r) => `${r.clutch_wins}/${r.clutch_attempts}`, sort: (r) => r.clutch_wins},
+    {k: "multi", label: "3K+", fmt: (r) => r.k3 + r.k4 + r.k5, sort: (r) => r.k3 + r.k4 + r.k5},
+    {k: "util_damage", label: "Util dmg"}, {k: "enemies_flashed", label: "Flashed"},
+    {k: "swing_pr", label: "Swing", fmt: (r) => (r.rating_kind === "2.0" ? "–" : sgn(r.swing_pr)), cls: (r) => (r.rating_kind === "2.0" ? "" : num(r.swing_pr) >= 0 ? "good" : "bad")},
+    {k: "rating", label: "Rating", fmt: (r) => f2(r.rating) + kindTag(r), cls: (r) => "b " + ratingCls(r.rating)},
+  ];
+  const team = (t) => ps.filter((p) => p.team === t);
+  $app.innerHTML = `
+    <div class="crumb"><a data-nav href="/">← Leaderboard</a></div>
+    <section class="card hero">
+      <div><h1>${esc(mapName(m.map))}</h1><div class="meta">${fmtDate(m.played_at, true)} · ${m.rounds} rounds · match #${m.id} · ${m.source === "demo" ? "from MatchZy demo" : "from server log"}</div></div>
+      <div class="score"><span class="a">${m.score_a}</span><span style="color:var(--faint)">:</span><span class="b">${m.score_b}</span></div>
+    </section>
+    ${rounds ? `<section class="card"><h2>Rounds</h2><p class="note"><span class="sw" style="background:var(--team-a)"></span>${esc(ta)} &nbsp; <span class="sw" style="background:var(--team-b)"></span>${esc(tb)} · gap marks halftime</p><div class="rounds">${rounds}</div></section>` : ""}
+    ${d.highlights.length ? `<div class="hl">${d.highlights.map((x) => `<div class="card"><div class="t">${x.icon} ${esc(x.title)}</div><div class="p">${pLink(x.steamid, x.name)}</div><div class="x">${esc(x.text)}</div></div>`).join("")}</div>` : ""}
+    ${["A", "B"].map((t) => `<section class="card"><div class="teamhead"><h2><span class="dot${t}"></span>${esc(t === "A" ? ta : tb)}</h2><b>${t === "A" ? m.score_a : m.score_b}${(t === "A" ? m.score_a > m.score_b : m.score_b > m.score_a) ? " 🏆" : ""}</b></div><div class="scroll" id="team${t}"></div></section>`).join("")}`;
+  for (const t of ["A", "B"]) {
+    const draw = () => { table.onSort["t" + t] = draw; document.getElementById("team" + t).innerHTML = table("t" + t, cols, team(t), {sortKey: "rating", href: (r) => "/player/" + r.steamid}); };
+    draw();
+  }
+}
+
+// ---------------------------------------------------------------- router
+async function route() {
+  const path = location.pathname;
+  let m;
+  try {
+    if ((m = path.match(/^\/player\/(\d{17})\/?$/))) await pagePlayer(m[1]);
+    else if ((m = path.match(/^\/match\/(\d+)\/?$/))) await pageMatch(m[1]);
+    else await pageHome();
+    window.scrollTo(0, 0);
+  } catch (e) {
+    $app.innerHTML = `<div class="crumb"><a data-nav href="/">← Leaderboard</a></div><div class="card empty err">${esc(e.message || e)}</div>`;
+  }
+}
+route();
+</script>
+</body>
+</html>
