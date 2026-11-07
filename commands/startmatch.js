@@ -1,5 +1,6 @@
 const { SlashCommandBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder } = require("discord.js");
 const { buildConnectMessage } = require("../lib/serverInfo");
+const teams = require("../lib/teams");
 
 module.exports = {
     data: new SlashCommandBuilder()
@@ -45,7 +46,11 @@ module.exports = {
                     new ButtonBuilder()
                         .setCustomId(`start_picking:${matchId}`)
                         .setLabel("Start Picking")
-                        .setStyle(ButtonStyle.Primary)
+                        .setStyle(ButtonStyle.Primary),
+                    new ButtonBuilder()
+                        .setCustomId(`randomize:${matchId}`)
+                        .setLabel("Randomize Teams (by Elo)")
+                        .setStyle(ButtonStyle.Secondary)
                 );
 
                 // This expects to be called from the original lobby message interaction (button)
@@ -171,7 +176,11 @@ module.exports = {
                         new ButtonBuilder()
                             .setCustomId(`move_players:${matchId}`)
                             .setLabel("Move Players to Voice")
-                            .setStyle(ButtonStyle.Primary)
+                            .setStyle(ButtonStyle.Primary),
+                        new ButtonBuilder()
+                            .setCustomId(`sendteams:${matchId}`)
+                            .setLabel("Send Teams to Server")
+                            .setStyle(ButtonStyle.Success)
                     );
                     rows.push(controlRow);
                 }
@@ -223,6 +232,34 @@ module.exports = {
 
                 // Otherwise continue the draft
                 await match.showDraftBoard(interaction);
+            },
+
+            // "Randomize Teams": two random captains, everyone else split so average Elo is even
+            async randomizeTeams(interaction) {
+                if (!teams.canRun(interaction, match))
+                    return interaction.reply({ content: "Only the person who started the match can randomize teams.", ephemeral: true });
+                if (match.players.length < 2)
+                    return interaction.reply({ content: "Need at least 2 players to make teams.", ephemeral: true });
+                await interaction.deferUpdate();
+
+                const result = await teams.balancedTeams(match.players);
+                match.captains = result.captains;
+                match.team1 = result.team1;
+                match.team2 = result.team2;
+                match.turn = null;
+
+                await interaction.channel.send({ embeds: [teams.balanceEmbed(result, interaction.guild)] });
+                await match.showDraftBoard(interaction);   // final board: connect info, move + send buttons
+                await match.movePlayers(interaction, client);
+            },
+
+            // "Send Teams to Server": check links, pick a map, load the teams into MatchZy
+            async promptSendTeams(interaction) {
+                return teams.promptSendTeams(interaction, match);
+            },
+
+            async sendTeams(interaction) {
+                return teams.sendTeams(interaction, match);
             },
 
             // Move users into configured voice channels
@@ -290,7 +327,11 @@ module.exports = {
             new ButtonBuilder()
                 .setCustomId(`start_picking:${matchId}`)
                 .setLabel("Start Picking")
-                .setStyle(ButtonStyle.Primary)
+                .setStyle(ButtonStyle.Primary),
+            new ButtonBuilder()
+                .setCustomId(`randomize:${matchId}`)
+                .setLabel("Randomize Teams (by Elo)")
+                .setStyle(ButtonStyle.Secondary)
         );
 
         await interaction.reply({ embeds: [embed], components: [buttons] });

@@ -25,7 +25,6 @@ STATS = {
     "flash_assists":   ("Flash assists",    "{:.0f}", True),
     "team_flashed":    ("Teammates flashed 🙃", "{:.0f}", True),
     "aces":            ("Aces",             "{:.0f}", True),
-    "rating2":         ("Rating 2.0 (old)", "{:.2f}", True),
 }
 
 CATEGORIES = {

@@ -10,6 +10,8 @@ Public (read-only) endpoints — used by the website:
   GET  /api/players/<steamid>
   GET  /api/matches?limit=20&offset=0
   GET  /api/matches/<id>
+  GET  /api/ranks                          rank bands + which custom badge images exist
+  GET  /api/matchconfig/<matchid>.json     match setup for MatchZy (matchzy_loadmatch_url)
 
 Bot-only endpoints — need "Authorization: Bearer $STATS_API_KEY":
   GET  /api/announcements                 matches waiting to be posted to Discord
@@ -18,6 +20,8 @@ Bot-only endpoints — need "Authorization: Bearer $STATS_API_KEY":
   POST /api/link     {"discord_id", "steamid"}
   POST /api/unlink   {"discord_id"}
   POST /api/rescan
+  POST /api/discord-ratings {"discord_ids": [...]}  -> Elo for linked members (team balancing)
+  POST /api/matchconfig {"team1": {"name", "players": {steamid: name}}, "team2": ..., "map"}
   DELETE /api/matches/<id>
 """
 from __future__ import annotations
@@ -36,6 +40,7 @@ from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
+from . import elo as elo_mod
 from .db import DB
 from .ingest import DemoWatcher
 from .leaderboard import with_categories
@@ -90,8 +95,9 @@ def highlights(players: list[dict]) -> list[dict]:
     def best(k):
         return max(players, key=lambda p: p.get(k) or 0)
 
-    mvp = best("rating")
-    add("mvp", "⭐", "MVP", mvp, f"{mvp['rating']:.2f} rating · {mvp['kills']}-{mvp['deaths']}")
+    mvp = best("rating") if any(p.get("rating") is not None for p in players) else best("kills")
+    add("mvp", "⭐", "MVP", mvp, (f"{mvp['rating']:.2f} rating · " if mvp.get("rating") is not None else "")
+        + f"{mvp['kills']}-{mvp['deaths']}")
     ent = best("entry_wins")
     if ent["entry_wins"]:
         add("entry", "🚪", "Entry king", ent, f"won {ent['entry_wins']}/{ent['entry_attempts']} opening duels")
@@ -139,6 +145,27 @@ class StatsService:
             poll=env_int("POLL_SECONDS", 20), stable_seconds=env_int("STABLE_SECONDS", 45),
             min_rounds=env_int("MIN_ROUNDS", 10), min_team_size=env_int("MIN_TEAM_SIZE", 4))
         self.loop = asyncio.new_event_loop()
+        self.rank_dir = os.environ.get("RANK_IMAGE_DIR", os.path.join(os.path.dirname(self.db_path) or ".", "ranks"))
+        self._elo = (None, {}, {})
+        self._elo_lock = threading.Lock()
+
+    # ---- Elo: replayed from the match history, cached until matches change ----
+    def elo(self):
+        v = self.db.version()
+        with self._elo_lock:
+            if self._elo[0] != v:
+                players, per_match = elo_mod.compute(self.db.elo_rows())
+                self._elo = (v, players, per_match)
+            return self._elo[1], self._elo[2]
+
+    def _with_elo(self, rows, match_id=None):
+        players, per_match = self.elo()
+        for r in rows:
+            r.update(players.get(r["steamid"], {}))
+            mid = match_id or r.get("match_id")
+            if mid is not None:
+                r.update(per_match.get((mid, r["steamid"]), {}))
+        return rows
 
     async def _on_new(self, match_id):
         log.info("match #%s queued for Discord", match_id)
@@ -167,14 +194,16 @@ class StatsService:
 
     # ---- read models ----
     def leaderboard(self, period=None, map_name=None):
-        rows = with_categories(self.db.aggregates(since=_since(period), map_name=map_name))
-        rows.sort(key=lambda r: -(r["rating"] or 0))
+        rows = self._with_elo(with_categories(self.db.aggregates(since=_since(period), map_name=map_name)))
+        rows.sort(key=lambda r: (r["rating"] is None, -(r["rating"] or 0)))   # unrated last
         return rows
 
     def summary(self):
         rows = self.leaderboard()
         ms = self.db.recent_matches(10000)
-        qualified = [r for r in rows if r["matches"] >= self.min_matches] or rows
+        rated = [r for r in rows if r["rating"] is not None]
+        qualified = [r for r in rated if r["matches"] >= self.min_matches] or rated
+        ranked = sorted((r for r in rows if r.get("rank")), key=lambda r: -r["elo"])
         top_k = max(rows, key=lambda r: r["kills"] or 0) if rows else None
         maps = sorted({m["map"] for m in ms})
         return {
@@ -187,6 +216,8 @@ class StatsService:
                        "rating": qualified[0]["rating"]} if qualified else None,
             "top_killer": {"steamid": top_k["steamid"], "name": top_k["name"],
                            "kills": top_k["kills"]} if top_k else None,
+            "top_elo": {k: ranked[0][k] for k in ("steamid", "name", "elo", "rank_name", "rank_short",
+                                                  "rank_color", "rank")} if ranked else None,
             "maps": maps,
             "min_matches": self.min_matches,
         }
@@ -196,9 +227,9 @@ class StatsService:
         agg = next((r for r in rows if r["steamid"] == steamid), None)
         if not agg:
             return None
-        agg["rank"] = 1 + sum(1 for r in rows if r["rating"] > agg["rating"]
-                              and r["matches"] >= self.min_matches)
-        history = self.db.player_history(steamid, limit=500)
+        agg["position"] = (1 + sum(1 for r in rows if r["rating"] is not None and r["rating"] > agg["rating"]
+                                   and r["matches"] >= self.min_matches)) if agg["rating"] is not None else None
+        history = self._with_elo(self.db.player_history(steamid, limit=500))
         by_map = []
         for m in sorted({h["map"] for h in history}):
             r = next((x for x in self.db.aggregates(map_name=m) if x["steamid"] == steamid), None)
@@ -213,7 +244,54 @@ class StatsService:
         m, ps = self.db.match(match_id)
         if not m:
             return None
-        return {"match": m, "players": ps, "highlights": highlights(ps)}
+        return {"match": m, "players": self._with_elo(ps, match_id=m["id"]), "highlights": highlights(ps)}
+
+    def rank_images(self):
+        """Custom badge images the server owner dropped in RANK_IMAGE_DIR (1.png ... 18.png)."""
+        out = {}
+        if os.path.isdir(self.rank_dir):
+            for f in os.listdir(self.rank_dir):
+                stem, ext = os.path.splitext(f)
+                if stem.isdigit() and 1 <= int(stem) <= 18 and ext.lower() in (".png", ".webp", ".svg", ".jpg"):
+                    out[int(stem)] = f"/ranks/{f}"
+        return out
+
+    def discord_ratings(self, discord_ids):
+        links = self.db.discord_links()                     # steamid -> discord_id
+        by_discord = {d: s for s, d in links.items()}
+        players, _ = self.elo()
+        out = {}
+        for did in discord_ids:
+            sid = by_discord.get(str(did))
+            if not sid:
+                continue
+            info = self.db.player(sid) or {}
+            e = players.get(sid, {})
+            out[str(did)] = {"steamid": sid, "name": info.get("name") or sid,
+                             "elo": e.get("elo", round(elo_mod.START)), "rank_name": e.get("rank_name", "Unranked"),
+                             "rank_short": e.get("rank_short", "—"), "placed": e.get("placed", False)}
+        return out
+
+    def make_matchzy_config(self, body):
+        """Match setup for MatchZy: our two teams, one map, knife round for sides."""
+        teams = {}
+        for k in ("team1", "team2"):
+            t = body.get(k) or {}
+            players = {str(s): str(n)[:32] for s, n in (t.get("players") or {}).items() if STEAMID.match(str(s))}
+            if not players:
+                raise ValueError(f"{k} has no players with a SteamID64")
+            teams[k] = {"name": re.sub(r"[^\w .-]", "", str(t.get("name") or k))[:32] or k, "players": players}
+        mp = str(body.get("map") or "").strip()
+        if not re.fullmatch(r"[A-Za-z0-9_\-]{2,64}", mp):
+            raise ValueError("bad map name")
+        size = max(len(teams["team1"]["players"]), len(teams["team2"]["players"]))
+        cfg = {"matchid": 0, "team1": teams["team1"], "team2": teams["team2"],
+               "num_maps": 1, "maplist": [mp], "map_sides": ["knife"], "skip_veto": True,
+               "clinch_series": True, "players_per_team": size,
+               "min_players_to_ready": len(teams["team1"]["players"]) + len(teams["team2"]["players"]),
+               "cvars": {}}
+        mid = self.db.save_matchzy_config(cfg)
+        return {"matchid": mid, "path": f"/api/matchconfig/{mid}.json", "config": cfg}
 
 
 # ----------------------------------------------------------------------------- HTTP
@@ -276,6 +354,12 @@ class Handler(BaseHTTPRequestHandler):
             if route == ["leaderboard"]:
                 return self._json({"players": svc.leaderboard(q.get("period"), q.get("map") or None),
                                    "min_matches": svc.min_matches})
+            if route == ["ranks"]:
+                return self._json({"ranks": elo_mod.ranks_table(), "images": svc.rank_images(),
+                                   "placement_matches": elo_mod.PLACEMENT_MATCHES})
+            if len(route) == 2 and route[0] == "matchconfig" and route[1].endswith(".json"):
+                cfg = svc.db.matchzy_config(route[1][:-5])
+                return self._json(cfg) if cfg else self._err(404, "no such match setup")
             if route == ["players"]:
                 return self._json(svc.db.player_names(q.get("q", ""), limit=25))
             if len(route) == 2 and route[0] == "players":
@@ -339,9 +423,17 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"ok": True})
             if route == ["rescan"]:
                 return self._json({"ok": True, "new": svc.rescan()})
+            if route == ["discord-ratings"]:
+                b = self._body() or {}
+                return self._json({"players": svc.discord_ratings(list(b.get("discord_ids") or [])[:40])})
+            if route == ["matchconfig"]:
+                b = self._body()
+                if b is None:
+                    return self._err(400, "bad JSON")
+                return self._json(svc.make_matchzy_config(b))
             return self._err(404, "not found")
-        except (ValueError, TypeError):
-            return self._err(400, "bad request")
+        except (ValueError, TypeError) as e:
+            return self._err(400, str(e) or "bad request")
         except Exception:
             log.exception("POST %s failed", self.path)
             return self._err(500, "server error")
@@ -357,6 +449,14 @@ class Handler(BaseHTTPRequestHandler):
 
     # ---- website (one page; /player/<id> and /match/<id> are client-side routes) ----
     def _static(self, path):
+        m = re.fullmatch(r"/ranks/(\d{1,2}\.(?:png|webp|svg|jpg))", path)
+        if m:
+            file = os.path.join(self.svc.rank_dir, m.group(1))
+            if os.path.isfile(file):
+                with open(file, "rb") as f:
+                    return self._send(200, f.read(), mimetypes.guess_type(file)[0] or "image/png",
+                                      cache="public, max-age=3600")
+            return self._err(404, "no such image")
         name = path.lstrip("/")
         file = os.path.normpath(os.path.join(WEB_DIR, name)) if name else ""
         if name and file.startswith(WEB_DIR + os.sep) and os.path.isfile(file):

@@ -68,3 +68,34 @@ def test_api_flow(tmp_path, monkeypatch):
     with urllib.request.urlopen(base + "/player/" + SIDS[0]) as r:
         assert b"CS2 5v5 Leaderboard" in r.read()
     assert call(base + "/api/players/notanid")[0] == 400
+
+
+def test_elo_matchconfig_and_balancing_lookup(tmp_path, monkeypatch):
+    svc, base = start(tmp_path, monkeypatch)
+    fake_match(svc.db, announce=False)
+    lb = call(base + "/api/leaderboard")[1]["players"]
+    p0 = next(p for p in lb if p["steamid"] == SIDS[0])
+    assert p0["elo"] > 1500 and p0["rank"] == 0 and "Unranked" in p0["rank_name"]   # 1 of 5 placements
+    assert "rating2" not in p0
+    m = call(base + "/api/matches/1")[1]
+    assert all("elo_delta" in p for p in m["players"])
+
+    svc.db.link("42", SIDS[0])
+    code, r = call(base + "/api/discord-ratings", "POST", {"discord_ids": ["42", "99"]}, key="secret")
+    assert code == 200 and list(r["players"]) == ["42"] and r["players"]["42"]["steamid"] == SIDS[0]
+
+    body = {"team1": {"name": "Sam", "players": {SIDS[0]: "p0", SIDS[1]: "p1"}},
+            "team2": {"name": "Trev", "players": {SIDS[5]: "p5", SIDS[6]: "p6"}}, "map": "de_mirage"}
+    assert call(base + "/api/matchconfig", "POST", body)[0] == 401
+    code, made = call(base + "/api/matchconfig", "POST", body, key="secret")
+    assert code == 200 and made["matchid"] > 1000000
+    code, cfg = call(base + made["path"])                       # what MatchZy downloads
+    assert cfg["maplist"] == ["de_mirage"] and cfg["map_sides"] == ["knife"]
+    assert cfg["team1"]["name"] == "Sam" and cfg["players_per_team"] == 2
+    assert call(base + "/api/matchconfig", "POST", {**body, "map": "x; quit"}, key="secret")[0] == 400
+
+    # a demo of that match picks up the captain team names by roster
+    from cs2stats.ingest import config_team_names
+    from cs2stats.stats import PlayerMatch
+    P = {s: PlayerMatch(s, team="B" if s in (SIDS[0], SIDS[1]) else "A") for s in SIDS[:2] + SIDS[5:7]}
+    assert config_team_names(cfg, P) == ("Trev", "Sam")
