@@ -64,6 +64,9 @@
   .rk-badge { display: inline-flex; align-items: center; justify-content: center; min-width: 42px; height: 20px; padding: 0 6px;
     border-radius: 10px 3px 10px 3px; font-size: 11px; font-weight: 700; letter-spacing: .3px; color: #111;
     background: linear-gradient(135deg, var(--c), color-mix(in srgb, var(--c) 60%, #fff)); box-shadow: inset 0 0 0 1px rgba(0,0,0,.25); }
+  .rk-badge.dark { color: #f2f2f2; background: linear-gradient(135deg, var(--c), color-mix(in srgb, var(--c) 75%, #fff));
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,.45); }
+  .rk-badge.red { color: #fff; }
   .rk-badge.none { background: var(--panel-2); color: var(--muted); box-shadow: inset 0 0 0 1px var(--line); }
   .rk img { height: 22px; width: auto; display: block; }
   .rk .elo { color: var(--fg); font-weight: 600; }
@@ -157,12 +160,20 @@ let RANK_IMAGES = {}, PLACEMENTS = 5;                  // custom badge images fr
 async function loadRanks() {
   try { const d = await api("ranks"); RANK_IMAGES = d.images || {}; PLACEMENTS = d.placement_matches || 5; } catch (_) {}
 }
+// Light text on dark (black) and red badges, dark text on the rest
+function badgeTone(hex) {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex || "");
+  if (!m) return "";
+  const n = parseInt(m[1], 16), r = n >> 16, g = (n >> 8) & 255, b = n & 255;
+  if (0.299 * r + 0.587 * g + 0.114 * b < 70) return "dark";
+  return r > 150 && g < 90 && b < 90 ? "red" : "";
+}
 function badge(r) {
   if (!r || r.elo == null) return `<span class="rk-badge none" title="No matches yet">—</span>`;
   if (!r.rank) return `<span class="rk-badge none" title="${esc(r.rank_name)}">${r.placed ? "EXP" : "?"}</span>`;
   const img = RANK_IMAGES[r.rank];
   if (img) return `<img src="${esc(img)}" alt="${esc(r.rank_name)}" title="${esc(r.rank_name)}">`;
-  return `<span class="rk-badge" style="--c:${esc(r.rank_color)}" title="${esc(r.rank_name)}">${esc(r.rank_short)}</span>`;
+  return `<span class="rk-badge ${badgeTone(r.rank_color)}" style="--c:${esc(r.rank_color)}" title="${esc(r.rank_name)}">${esc(r.rank_short)}</span>`;
 }
 const rankCell = (r) => (r.elo == null ? "–" : `<span class="rk">${badge(r)}<span class="elo ${r.rank ? "" : "prov"}" title="${r.rank ? esc(r.rank_name) : "Provisional until placed"}">${r.elo}</span></span>`);
 const delta = (d) => (d == null ? "–" : `<span class="delta ${d > 0 ? "up" : d < 0 ? "down" : ""}">${d > 0 ? "+" : ""}${d}</span>`);

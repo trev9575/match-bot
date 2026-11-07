@@ -51,11 +51,11 @@ RANKS = [
     ("Master Guardian I", "MG1", "#3fa7d6", 1575),
     ("Master Guardian II", "MG2", "#3fa7d6", 1625),
     ("Master Guardian Elite", "MGE", "#4cb8e8", 1700),
-    ("Distinguished Master Guardian", "DMG", "#5cc6f0", 1775),
-    ("Legendary Eagle", "LE", "#8b6fe0", 1850),
-    ("Legendary Eagle Master", "LEM", "#9b7ff0", 1925),
-    ("Supreme Master First Class", "SMFC", "#e0576b", 2000),
-    ("The Global Elite", "GE", "#f2c94c", 2100),
+    ("Distinguished Master Guardian", "DMG", "#16171b", 1775),
+    ("Legendary Eagle", "LE", "#16171b", 1850),
+    ("Legendary Eagle Master", "LEM", "#16171b", 1925),
+    ("Supreme Master First Class", "SMFC", "#c62828", 2000),
+    ("The Global Elite", "GE", "#e53935", 2100),
 ]
 
 
