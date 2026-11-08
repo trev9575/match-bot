@@ -53,3 +53,37 @@ def test_win_contribution_scales_elo_change():
     assert d["b2"] < d["b1"] < 0                 # both lose; the weak game costs more
     assert d["a1"] / d["a2"] < 1.3 / 0.7 + 0.01  # capped: at most +/-30%
     assert elo.contribution(None, 1.0) == 1.0 and elo.contribution(3.0, 1.0) == 1.3
+
+
+def test_seasons_soft_reset_and_snapshots():
+    assert elo.season_of("2026-11-07T10:00:00") == 1 and elo.season_of("2027-01-02T10:00:00") == 2
+    assert elo.season_bounds(2) == ("2027-01-01T00:00:00", "2027-04-01T00:00:00")
+    A, B = ["a1", "a2"], ["b1", "b2"]
+    games = [(f"2026-12-{d:02d}T20:00:00", A, B, "A") for d in range(1, 9)]
+    full = elo.compute_full(rows_for(games), now="2026-12-20T00:00:00")
+    top = full["players"]["a1"]["elo"]
+    assert full["players"]["a1"]["placed"] and full["season_final"][1]["a1"]["elo"] == top
+    # a new season: pulled halfway back to 1500, re-places after SEASON_PLACEMENT games
+    later = elo.compute_full(rows_for(games), now="2027-01-03T00:00:00")
+    a1 = later["players"]["a1"]
+    assert abs(a1["elo"] - (1500 + (top - 1500) * elo.SEASON_CARRY)) <= 1
+    assert not a1["placed"] and "Season placement" in a1["rank_name"]
+    more = games + [(f"2027-01-0{d}T20:00:00", A, B, "B") for d in (2, 3)]
+    after = elo.compute_full(rows_for(more), now="2027-01-04T00:00:00")
+    assert after["players"]["a1"]["placed"] and after["players"]["a1"]["season_matches"] == 2
+    # the upset was flagged by pre-match odds
+    assert after["match_odds"][9] > 0.5
+
+
+def test_prediction_odds_and_ranges():
+    A, B = ["a1", "a2"], ["b1", "b2"]
+    games = [(f"2026-11-0{d}T20:00:00", A, B, "A") for d in range(1, 6)]
+    full = elo.compute_full(rows_for(games), now="2026-11-06T00:00:00")
+    pr = elo.predict(full, A, B)
+    assert pr["win_prob_a"] > 0.6 and abs(pr["win_prob_a"] + pr["win_prob_b"] - 1) < 1e-9
+    a1, b1 = pr["players"]["a1"], pr["players"]["b1"]
+    assert 0 < a1["elo_win"][0] <= a1["elo_win"][1] and a1["elo_loss"][0] <= a1["elo_loss"][1] < 0
+    # favourites gain less for winning than underdogs
+    assert a1["elo_win"][1] < b1["elo_win"][1]
+    new = elo.predict(full, ["a1", "zz"], ["b1"])
+    assert new["players"]["zz"]["elo_matches"] == 0

@@ -48,7 +48,47 @@ def contribution(rating, score) -> float:
         return 1.0
     f = 1 + CONTRIBUTION_WEIGHT * (rating - 1) * (1 if score == 1 else -1)
     return max(1 - MAX_ADJUST, min(1 + MAX_ADJUST, f))
-RANK_EXPIRE_DAYS = env_int("RANK_EXPIRE_DAYS", 30)    # CS:GO hid your rank after ~a month idle; 0 = never
+RANK_EXPIRE_DAYS = env_int("RANK_EXPIRE_DAYS", 30)
+
+# Seasons: every SEASON_MONTHS months from SEASON_ANCHOR. When a new season starts, Elo is pulled
+# halfway back to 1500 (SEASON_CARRY = how much of the distance you keep), uncertainty goes up so
+# early games move more, and placed players need SEASON_PLACEMENT games before their rank shows.
+SEASON_MONTHS = max(env_int("SEASON_MONTHS", 3), 1)
+SEASON_ANCHOR = (os.environ.get("SEASON_ANCHOR", "").split("#")[0].strip() or "2026-10-01")
+SEASON_CARRY = float(os.environ.get("SEASON_CARRY", "0.5").split("#")[0].strip() or 0.5)
+SEASON_RD = 200.0
+SEASON_PLACEMENT = env_int("SEASON_PLACEMENT", 2)
+
+
+def _anchor():
+    a = datetime.fromisoformat(SEASON_ANCHOR[:10])
+    return a.year, a.month
+
+
+def season_of(ts) -> int:
+    """Season number for a timestamp (1 = the season starting at SEASON_ANCHOR)."""
+    try:
+        d = datetime.fromisoformat(str(ts)[:19])
+    except (TypeError, ValueError):
+        return 1
+    y, m = _anchor()
+    months = (d.year - y) * 12 + (d.month - m)
+    return months // SEASON_MONTHS + 1
+
+
+def season_bounds(n: int) -> tuple[str, str]:
+    y, m = _anchor()
+    def at(k):
+        total = (y * 12 + m - 1) + k * SEASON_MONTHS
+        return f"{total // 12:04d}-{total % 12 + 1:02d}-01T00:00:00"
+    return at(n - 1), at(n)
+
+
+def season_info(n: int, now: str | None = None) -> dict:
+    start, end = season_bounds(n)
+    cur = season_of(now or datetime.now().isoformat(timespec="seconds"))
+    return {"season": n, "name": f"Season {n}", "start": start, "end": end,
+            "current": n == cur, "finished": n < cur}    # CS:GO hid your rank after ~a month idle; 0 = never
 
 # (name, short, color, minimum Elo). Colors are our own tier colors.
 RANKS = [
@@ -144,6 +184,32 @@ def _days(a, b):
         return 0
 
 
+def win_probability(a: list[tuple], b: list[tuple]) -> float:
+    """Chance team A beats team B. a, b = [(elo, rd), ...]."""
+    if not a or not b:
+        return 0.5
+    ra, rb = sum(x[0] for x in a) / len(a), sum(x[0] for x in b) / len(b)
+    rda = math.sqrt(sum(x[1] ** 2 for x in a) / len(a))
+    rdb = math.sqrt(sum(x[1] ** 2 for x in b) / len(b))
+    g = _g(math.sqrt(rda ** 2 + rdb ** 2) / SCALE)
+    return 1 / (1 + math.exp(-g * (ra - rb) / SCALE))
+
+
+def _new_state():
+    return {"elo": START, "rd": START_RD, "vol": START_VOL, "matches": 0, "last": None,
+            "season": None, "season_matches": 0}
+
+
+def _season_roll(s, season):
+    """Soft reset when a player's first game of a new season comes around."""
+    if s["season"] is not None and season > s["season"]:
+        s["elo"] = START + (s["elo"] - START) * SEASON_CARRY
+        s["rd"] = max(s["rd"], SEASON_RD)
+        s["season_matches"] = 0
+    if s["season"] is None or season > s["season"]:
+        s["season"] = season
+
+
 def compute(rows: list[dict], now: str | None = None):
     """rows: one per player per match with match_id, played_at, steamid, team, result.
 
@@ -151,13 +217,52 @@ def compute(rows: list[dict], now: str | None = None):
       players[steamid]   = {elo, rd, matches, placed, rank..., last_played, inactive}
       per_match[(match_id, steamid)] = {elo_before, elo_after, elo_delta}
     """
+    full = compute_full(rows, now)
+    return full["players"], full["per_match"]
+
+
+def _public(s, now, cur_season):
+    """What we show for a player's current state (after any pending season reset)."""
+    s = dict(s)
+    if s["last"]:
+        s["rd"] = _idle_rd(s["rd"], s["vol"], _days(s["last"], now))
+    _season_roll(s, cur_season)
+    placed = s["matches"] >= PLACEMENT_MATCHES
+    # a veteran who placed in an earlier season re-places; players placing for the first time
+    # this season count as placed as soon as their lifetime placement is done
+    if placed and s["season_matches"] < SEASON_PLACEMENT and s["matches"] - s["season_matches"] >= PLACEMENT_MATCHES:
+        placed = False
+    inactive = bool(RANK_EXPIRE_DAYS) and bool(s["last"]) and _days(s["last"], now) > RANK_EXPIRE_DAYS
+    info = {"elo": round(s["elo"]), "elo_rd": round(s["rd"]), "elo_matches": s["matches"],
+            "season_matches": s["season_matches"], "placed": placed, "inactive": inactive,
+            "placement_needed": PLACEMENT_MATCHES}
+    if placed and not inactive:
+        info.update(rank_for(s["elo"]))
+    else:
+        if s["matches"] < PLACEMENT_MATCHES:
+            label = f"Unranked ({s['matches']}/{PLACEMENT_MATCHES})"
+        elif inactive:
+            label = "Rank expired"
+        elif not placed:
+            label = f"Season placement ({s['season_matches']}/{SEASON_PLACEMENT})"
+        else:
+            label = "Rank expired"
+        info.update({"rank": 0, "rank_short": "—", "rank_color": "#6d6d6d", "rank_name": label})
+    return info, s
+
+
+def compute_full(rows: list[dict], now: str | None = None) -> dict:
+    """Everything compute() does, plus season snapshots, per-match odds and raw state."""
     by_match: dict[int, dict] = {}
     for r in rows:
         m = by_match.setdefault(r["match_id"], {"played_at": r["played_at"] or "", "players": []})
         m["players"].append(r)
     state: dict[str, dict] = {}
     per_match = {}
+    match_odds = {}            # match_id -> chance team A had before the match
+    season_final = {}          # season -> steamid -> state after their last game of that season
     for mid, m in sorted(by_match.items(), key=lambda kv: (kv[1]["played_at"], kv[0])):
+        season = season_of(m["played_at"])
         teams = {"A": [], "B": []}
         for p in m["players"]:
             if p["team"] in teams:
@@ -166,13 +271,16 @@ def compute(rows: list[dict], now: str | None = None):
             continue
         # bring everyone's uncertainty up to date before the match
         for p in m["players"]:
-            s = state.setdefault(p["steamid"], {"elo": START, "rd": START_RD, "vol": START_VOL,
-                                                "matches": 0, "last": None})
+            s = state.setdefault(p["steamid"], _new_state())
             if s["last"]:
                 s["rd"] = _idle_rd(s["rd"], s["vol"], _days(s["last"], m["played_at"]))
+            _season_roll(s, season)
         avg = {t: (sum(state[p["steamid"]]["elo"] for p in ps) / len(ps),
                    math.sqrt(sum(state[p["steamid"]]["rd"] ** 2 for p in ps) / len(ps)))
                for t, ps in teams.items()}
+        match_odds[mid] = win_probability(
+            [(state[p["steamid"]]["elo"], state[p["steamid"]]["rd"]) for p in teams["A"]],
+            [(state[p["steamid"]]["elo"], state[p["steamid"]]["rd"]) for p in teams["B"]])
         updates = {}
         for t, ps in teams.items():
             opp_r, opp_rd = avg["B" if t == "A" else "A"]
@@ -187,20 +295,59 @@ def compute(rows: list[dict], now: str | None = None):
             s = state[sid]
             per_match[(mid, sid)] = {"elo_before": round(s["elo"]), "elo_after": round(r),
                                      "elo_delta": round(r) - round(s["elo"])}
-            s.update(elo=r, rd=rd, vol=vol, matches=s["matches"] + 1, last=m["played_at"])
+            s.update(elo=r, rd=rd, vol=vol, matches=s["matches"] + 1, last=m["played_at"],
+                     season_matches=s["season_matches"] + 1)
+            season_final.setdefault(season, {})[sid] = {
+                "elo": round(r), "matches": s["matches"], "season_matches": s["season_matches"],
+                "placed": s["matches"] >= PLACEMENT_MATCHES}
 
     now = now or datetime.now().isoformat(timespec="seconds")
+    cur = season_of(now)
     players = {}
     for sid, s in state.items():
-        placed = s["matches"] >= PLACEMENT_MATCHES
-        inactive = bool(RANK_EXPIRE_DAYS) and _days(s["last"], now) > RANK_EXPIRE_DAYS
-        info = {"elo": round(s["elo"]), "elo_rd": round(s["rd"]), "elo_matches": s["matches"],
-                "placed": placed, "inactive": inactive, "placement_needed": PLACEMENT_MATCHES}
-        info.update(rank_for(s["elo"]) if placed and not inactive else
-                    {"rank": 0, "rank_short": "—", "rank_color": "#6d6d6d",
-                     "rank_name": "Rank expired" if placed else f"Unranked ({s['matches']}/{PLACEMENT_MATCHES})"})
-        players[sid] = info
-    return players, per_match
+        players[sid], _ = _public(s, now, cur)
+    for snap in season_final.values():
+        for v in snap.values():
+            v.update(rank_for(v["elo"]) if v["placed"] else
+                     {"rank": 0, "rank_short": "—", "rank_color": "#6d6d6d", "rank_name": "Unranked"})
+    return {"players": players, "per_match": per_match, "match_odds": match_odds,
+            "season_final": season_final, "state": state, "now": now, "season": cur}
+
+
+def contribution_range() -> tuple[float, float]:
+    if not CONTRIBUTION_WEIGHT:
+        return 1.0, 1.0
+    return 1 - MAX_ADJUST, 1 + MAX_ADJUST
+
+
+def predict(full: dict, team_a: list[str], team_b: list[str]) -> dict:
+    """Pre-match odds and each player's possible Elo change, from compute_full() output."""
+    now, cur = full["now"], full["season"]
+    cur_state = {}
+    for sid in set(team_a) | set(team_b):
+        s = full["state"].get(sid) or _new_state()
+        info, live = _public(s, now, cur)
+        cur_state[sid] = (info, live)
+    side = {"A": team_a, "B": team_b}
+    avg = {t: (sum(cur_state[s][1]["elo"] for s in ids) / len(ids),
+               math.sqrt(sum(cur_state[s][1]["rd"] ** 2 for s in ids) / len(ids))) if ids else (START, START_RD)
+           for t, ids in side.items()}
+    pa = win_probability([(cur_state[s][1]["elo"], cur_state[s][1]["rd"]) for s in team_a],
+                         [(cur_state[s][1]["elo"], cur_state[s][1]["rd"]) for s in team_b])
+    lo, hi = contribution_range()
+    players = {}
+    for t, ids in side.items():
+        opp = avg["B" if t == "A" else "A"]
+        for sid in ids:
+            info, live = cur_state[sid]
+            out = {}
+            for label, score in (("win", 1.0), ("loss", 0.0)):
+                r, _, _ = glicko2_update(live["elo"], live["rd"], live["vol"], [(opp[0], opp[1], score)])
+                d = r - live["elo"]
+                a, b = sorted((d * lo, d * hi))
+                out[label] = [round(a), round(b)]
+            players[sid] = {"team": t, **info, "elo_win": out["win"], "elo_loss": out["loss"]}
+    return {"win_prob_a": pa, "win_prob_b": 1 - pa, "players": players}
 
 
 def ranks_table():

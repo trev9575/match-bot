@@ -11,7 +11,12 @@ from . import rating3 as r3
 INT_COLS = ["rounds", "rounds_won", "kills", "deaths", "assists", "hs_kills", "damage",
             "util_damage", "kast_rounds", "entry_attempts", "entry_wins", "trade_kills",
             "traded_deaths", "clutch_attempts", "clutch_wins", "k2", "k3", "k4", "k5", "aces",
-            "enemies_flashed", "team_flashed", "flash_assists", "teamkills", "saved_lost"]
+            "enemies_flashed", "team_flashed", "flash_assists", "teamkills", "saved_lost",
+            "entry_attempts_t", "entry_wins_t", "entry_attempts_ct", "entry_wins_ct",
+            "knife_kills", "awp_kills", "plants", "defuses"]
+# Bump when compute() starts recording something new; demos read by an older version are
+# re-read once in the background to fill it in (match ids and Discord posts stay the same).
+DETAIL_VERSION = 2
 REAL_COLS = ["blind_time", "rating", "e_kills", "e_deaths", "e_damage", "swing", "mk_points"]
 # Rating 3.0 inputs, and how to tell a row has them (rows from before 3.0 are all zero)
 R3_COLS = ["rounds", "kast_rounds", "saved_lost", "e_kills", "e_deaths", "e_damage", "swing", "mk_points"]
@@ -38,6 +43,12 @@ CREATE TABLE IF NOT EXISTS skipped_demos (
   source_key TEXT PRIMARY KEY,     -- demo filename that was read and didn't count
   size INTEGER, reason TEXT, at TEXT
 );
+CREATE TABLE IF NOT EXISTS kill_pairs (
+  match_id INTEGER REFERENCES matches(id) ON DELETE CASCADE,
+  killer TEXT, victim TEXT, kills INTEGER, hs INTEGER, openings INTEGER,
+  PRIMARY KEY (match_id, killer, victim)
+);
+CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT);
 CREATE TABLE IF NOT EXISTS players (
   steamid TEXT PRIMARY KEY, name TEXT, discord_id TEXT UNIQUE
 );
@@ -58,11 +69,15 @@ class DB:
             for col in ("team_a_name", "team_b_name", "round_log"):
                 if col not in have_m:
                     c.execute(f"ALTER TABLE matches ADD COLUMN {col} TEXT")
+            if "detail_version" not in have_m:             # what compute() recorded for this match
+                c.execute("ALTER TABLE matches ADD COLUMN detail_version INTEGER DEFAULT 1")
             if "announced" not in have_m:                  # 0 = Discord scorecard not posted yet
                 c.execute("ALTER TABLE matches ADD COLUMN announced INTEGER DEFAULT 1")
             if "linked_at" not in {r["name"] for r in c.execute("PRAGMA table_info(players)")}:
                 c.execute("ALTER TABLE players ADD COLUMN linked_at TEXT")
             c.execute("CREATE INDEX IF NOT EXISTS pm_steamid ON player_match(steamid)")
+            c.execute("CREATE INDEX IF NOT EXISTS kp_killer ON kill_pairs(killer)")
+            c.execute("CREATE INDEX IF NOT EXISTS kp_victim ON kill_pairs(victim)")
 
     def baseline(self):
         """Group baseline for Rating 3.0: every player-map in the database."""
@@ -118,8 +133,8 @@ class DB:
     def version(self):
         """Changes whenever matches are added or removed (cache key)."""
         with self.conn() as c:
-            return tuple(c.execute("SELECT COUNT(*), COALESCE(SUM(id), 0), "
-                                   "COALESCE(MAX(imported_at), '') FROM matches").fetchone())
+            return tuple(c.execute("SELECT COUNT(*), COALESCE(SUM(id), 0), COALESCE(MAX(imported_at), ''), "
+                                   "COALESCE(SUM(detail_version), 0) FROM matches").fetchone())
 
     def mark_skipped(self, source_key: str, size: int, reason: str):
         with self.conn() as c:
@@ -145,13 +160,15 @@ class DB:
         with self.conn() as c:
             cur = c.execute(
                 "INSERT INTO matches (source_key, matchzy_id, map, played_at, imported_at, rounds,"
-                " score_a, score_b, source, team_a_name, team_b_name, round_log, announced)"
-                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                " score_a, score_b, source, team_a_name, team_b_name, round_log, announced,"
+                " detail_version) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (source_key, matchzy_id, summary["map"], played_at,
                  datetime.now().isoformat(timespec="seconds"), summary["rounds"],
                  summary["score_a"], summary["score_b"], source, *team_names,
-                 summary.get("round_log"), 0 if announce else 1))
+                 summary.get("round_log"), 0 if announce else 1,
+                 DETAIL_VERSION if source == "demo" else 1))
             mid = cur.lastrowid
+            self._save_pairs(c, mid, summary.get("pairs") or [])
             cols = ["steamid", "name", "team", "result", "clutches"] + INT_COLS + REAL_COLS
             for pm in players.values():
                 row = pm.as_row()
@@ -160,6 +177,77 @@ class DB:
                 c.execute("INSERT INTO players (steamid, name) VALUES (?, ?) "
                           "ON CONFLICT(steamid) DO UPDATE SET name=excluded.name", (pm.steamid, pm.name))
             return mid
+
+    @staticmethod
+    def _save_pairs(c, mid, pairs):
+        c.executemany("INSERT OR REPLACE INTO kill_pairs (match_id, killer, victim, kills, hs, openings) "
+                      "VALUES (?,?,?,?,?,?)", [(mid, *p) for p in pairs])
+
+    def stale_demos(self) -> dict:
+        """Demo-imported matches recorded by an older compute(): source_key -> match id."""
+        with self.conn() as c:
+            return {r[0]: r[1] for r in c.execute(
+                "SELECT source_key, id FROM matches WHERE source='demo' AND COALESCE(detail_version,1) < ?",
+                (DETAIL_VERSION,))}
+
+    def refresh_details(self, match_id, summary, players: dict[str, PlayerMatch]):
+        """Re-read of a demo: rewrite its per-player rows and kill pairs in place (same match id)."""
+        cols = ["name", "team", "result", "clutches"] + INT_COLS + REAL_COLS
+        with self.conn() as c:
+            for pm in players.values():
+                row = pm.as_row()
+                c.execute(f"UPDATE player_match SET {', '.join(f'{k}=?' for k in cols)} "
+                          "WHERE match_id=? AND steamid=?", [row[k] for k in cols] + [match_id, pm.steamid])
+            c.execute("DELETE FROM kill_pairs WHERE match_id=?", (match_id,))
+            self._save_pairs(c, match_id, summary.get("pairs") or [])
+            c.execute("UPDATE matches SET detail_version=?, round_log=COALESCE(?, round_log) WHERE id=?",
+                      (DETAIL_VERSION, summary.get("round_log"), match_id))
+
+    def mark_details(self, match_id):
+        with self.conn() as c:
+            c.execute("UPDATE matches SET detail_version=? WHERE id=?", (DETAIL_VERSION, match_id))
+
+    def kill_pairs(self, steamid=None):
+        """Rows of (match_id, played_at, killer, victim, kills, hs, openings)."""
+        q = ("SELECT kp.*, m.played_at FROM kill_pairs kp JOIN matches m ON m.id = kp.match_id")
+        with self.conn() as c:
+            if steamid:
+                return [dict(r) for r in c.execute(q + " WHERE kp.killer=? OR kp.victim=?", (steamid, steamid))]
+            return [dict(r) for r in c.execute(q)]
+
+    # ---------- small key/value store (bot schedules, last recap, ...) ----------
+    def kv_get(self, key):
+        with self.conn() as c:
+            r = c.execute("SELECT value FROM kv WHERE key=?", (key,)).fetchone()
+            return r[0] if r else None
+
+    def kv_set(self, key, value):
+        with self.conn() as c:
+            if value is None:
+                c.execute("DELETE FROM kv WHERE key=?", (key,))
+            else:
+                c.execute("INSERT OR REPLACE INTO kv (key, value) VALUES (?, ?)", (key, value))
+
+    def maps_played(self):
+        with self.conn() as c:
+            return [dict(r) for r in c.execute(
+                "SELECT map, COUNT(*) AS matches, MAX(played_at) AS last_played FROM matches "
+                "WHERE map IS NOT NULL GROUP BY map ORDER BY matches DESC, map")]
+
+    def all_rows(self, since=None, until=None):
+        """Every player-map row with its match info and Rating 3.0 (for achievements, duos, recaps)."""
+        where, args = [], []
+        if since:
+            where.append("m.played_at >= ?"); args.append(since)
+        if until:
+            where.append("m.played_at < ?"); args.append(until)
+        w = ("WHERE " + " AND ".join(where)) if where else ""
+        with self.conn() as c:
+            rows = [dict(r) for r in c.execute(
+                "SELECT pm.*, m.map, m.played_at, m.score_a, m.score_b, m.rounds AS match_rounds, "
+                f"m.round_log FROM player_match pm JOIN matches m ON m.id = pm.match_id {w} "
+                "ORDER BY m.played_at, m.id", args)]
+        return self._rate(rows)
 
     def delete_match(self, match_id: int):
         with self.conn() as c:
@@ -251,16 +339,22 @@ class DB:
                 "JOIN matches m ON m.id = pm.match_id WHERE steamid=? "
                 "ORDER BY m.played_at DESC, m.id DESC LIMIT ?", (steamid, limit))])
 
+    def names(self) -> dict:
+        with self.conn() as c:
+            return {r["steamid"]: r["name"] for r in c.execute("SELECT steamid, name FROM players")}
+
     def player(self, steamid):
         with self.conn() as c:
             r = c.execute("SELECT * FROM players WHERE steamid=?", (steamid,)).fetchone()
             return dict(r) if r else None
 
     # ---------- aggregates ----------
-    def aggregates(self, since: str | None = None, map_name: str | None = None):
+    def aggregates(self, since: str | None = None, map_name: str | None = None, until: str | None = None):
         where, args = [], []
         if since:
             where.append("m.played_at >= ?"); args.append(since)
+        if until:
+            where.append("m.played_at < ?"); args.append(until)
         if map_name:
             where.append("m.map = ?"); args.append(map_name)
         w = ("WHERE " + " AND ".join(where)) if where else ""
@@ -297,6 +391,9 @@ def derive(r: dict) -> dict:
     r["win_pct"] = 100 * (r["wins"] or 0) / max(r["matches"], 1)
     r["entry_rate"] = 100 * (r["entry_attempts"] or 0) / rounds
     r["entry_win_pct"] = 100 * (r["entry_wins"] or 0) / max(r["entry_attempts"] or 0, 1)
+    for sd in ("t", "ct"):
+        r[f"entry_win_pct_{sd}"] = (100 * (r.get(f"entry_wins_{sd}") or 0) / r[f"entry_attempts_{sd}"]
+                                    if r.get(f"entry_attempts_{sd}") else None)
     r["trade_kpr"] = 100 * (r["trade_kills"] or 0) / rounds        # per 100 rounds
     r["traded_pct"] = 100 * (r["traded_deaths"] or 0) / max(d, 1)
     r["clutch_win_pct"] = 100 * (r["clutch_wins"] or 0) / max(r["clutch_attempts"] or 0, 1)
