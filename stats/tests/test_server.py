@@ -151,3 +151,14 @@ def test_community_endpoints(tmp_path, monkeypatch):
     assert call(base + "/api/kv/recap")[0] == 401
     with urllib.request.urlopen(base + "/ach/ace.svg") as r:
         assert r.headers["Content-Type"] == "image/svg+xml" and b"<svg" in r.read()
+
+
+def test_matchzy_events(tmp_path, monkeypatch):
+    svc, base = start(tmp_path, monkeypatch)
+    assert call(base + "/api/matchzy-event", "POST", {"event": "map_result", "matchid": 7}, key="wrong")[0] == 401
+    assert call(base + "/api/matchzy-event", "POST", {"event": "round_end", "matchid": 7}, key="secret")[0] == 200
+    assert call(base + "/api/matchzy-event", "POST", {"event": "map_result", "matchid": 7,
+                "team1": {"name": "a", "score": 13, "players": []}}, key="secret")[0] == 200
+    code, ev = call(base + "/api/events?after=0", key="secret")
+    assert [e["event"] for e in ev["events"]] == ["map_result"] and ev["events"][0]["team1"]["score"] == 13
+    assert call(base + f"/api/events?after={ev['last']}", key="secret")[1]["events"] == []
