@@ -40,7 +40,7 @@ Short version: fill in the stats section of `.env` (see `.env.example`), then `d
 - **Rank & Elo**: CS:GO-style. Glicko-2 on wins/losses (what Valve said CS:GO used), replayed from the match
   history, with each player's match Rating 3.0 scaling their change by up to ±30%; 1500 start = Gold Nova III,
   18 ranks, rank and Elo hidden until 5 placement matches, rank hidden after 30 days idle. Leaderboards rank by Elo.
-  Our own rank bands and badges; drop `1.png`…`18.png` in the stats data folder's `ranks/` to use your own images.
+  Rank badges are the Agartha set bundled with the site; drop `1.png`…`18.png` in the stats data folder's `ranks/` to override.
 - **Playstyles chart**: each player placed around a circle of the five profile categories; middle = most
   typical profile, edge = most extreme.
 - ADR, KAST, HS%, opening duels, trades, clutches, multi-kills/aces, utility damage, flashes (incl. teammates flashed).
@@ -53,9 +53,11 @@ Short version: fill in the stats section of `.env` (see `.env.example`), then `d
 - **Win prediction**: posted when teams are set (draft or Randomize): each team's chance from everyone's Elo,
   and how much Elo each player can win or lose (a range, because Rating 3.0 scales it ±30%). Match pages and
   scorecards show the pre-match odds and flag upsets.
+- **Rank badges**: the Agartha rank set in `stats/cs2stats/web/ranks/1..18.png` (Silver I … Global Elite);
+  drop your own `1.png`…`18.png` in the stats data folder's `ranks/` to override.
 - **Achievements**: 40 badges (original artwork, `stats/cs2stats/icons.py`) computed from the match history:
   feats like Ace or a 1v4 clutch, milestones, rank tiers, season podiums, and a small hall of shame.
-  New ones are posted with the scorecard; profiles show the full grid with rarity.
+  Profiles show the full grid with rarity (set `ANNOUNCE_ACHIEVEMENTS=true` to also post unlocks in Discord).
 - **Who killed who**: every demo records kills, headshots and opening duels between each pair of players.
   Profiles get head-to-head and teammate tables, nemesis / favorite victim, and opening duels split by T/CT.
   Demos read by an older version are re-read once in the background to fill this in.
@@ -65,7 +67,16 @@ Short version: fill in the stats section of `.env` (see `.env.example`), then `d
   standings are posted, and the top 3 earn achievements. Season filter on the leaderboard.
 - **Live server status**: one message in `STATUS_CHANNEL_ID` kept up to date (map, players, Join button), plus
   the bot's status line. Uses Steam's standard server query; nothing is sent to the server's console.
-- **Back to lobby**: when the scorecard posts, everyone in the team channels goes back to `LOBBY_VOICE_CHANNEL_ID`.
+- **Back to lobby**: when a match ends, everyone in the team channels goes back to `LOBBY_VOICE_CHANNEL_ID`.
+  **Instant back-to-lobby:** have MatchZy send its live events to the stats service. Add to
+  `game/csgo/cfg/MatchZy/config.cfg` **and** `live.cfg` on the CS2 server (use your `STATS_API_KEY`):
+  ```
+  matchzy_remote_log_url "http://192.168.0.204:8082/api/matchzy-event"
+  matchzy_remote_log_header_key "Authorization"
+  matchzy_remote_log_header_value "Bearer YOUR_STATS_API_KEY"
+  ```
+  The bot then moves everyone ~5 s after the last round (`LOBBY_RETURN_DELAY_SECONDS`). Without it, the move
+  happens when the scorecard posts (after the demo is written and parsed, a few minutes).
 - **Map vote** (optional): the match starter picks maps we've played and/or types any map name (typed maps
   aren't saved); lobby players vote with buttons, the starter ends it.
 

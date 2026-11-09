@@ -314,7 +314,7 @@ async function pageHome() {
       <div class="scroll" id="lbtable"></div>
     </section>
     <section class="card"><h2>Playstyles</h2>
-      <p class="note">Each dot is a player. The closer a dot sits to a category, the more that category stands out in their game compared with the rest of the group. The middle is the most typical, balanced profile; the edge is the most extreme. Built from the five profile scores. Click a dot for the profile.</p>
+      <p class="note">Each dot is a player, on the spoke of their best category (scores are percentiles in the group). The further out, the more that category stands out above the rest of their game; dots in the middle are even across the board. Each dot tilts toward the player's second-best category. Hover a dot for the scores, click for the profile.</p>
       <div id="playstyle" style="overflow-x:auto"></div></section>
     <div class="grid2">
       <section class="card"><h2>Rating 3.0 by player</h2>
@@ -563,33 +563,38 @@ function trend(h, key) {
 // Each of the five profile scores is a direction around the circle. A player's dot
 // points toward what stands out in their own profile (scores relative to their own
 // average), and sits further out the more their profile differs from the group's
-// average profile. Middle = most typical; edge = most extreme.
+// profile. Middle = balanced; out along a spoke = that category is their standout strength.
 const STYLE_CATS = [["firepower", "Firepower"], ["entrying", "Entrying"], ["trading", "Trading"], ["clutching", "Clutching"], ["utility", "Utility"]];
 function playstyleMap(rows) {
   rows = rows.filter((r) => STYLE_CATS.every(([k]) => r[k] != null));
   if (rows.length < 3) return `<div class="empty">Needs at least three players.</div>`;
   const W = 760, H = 560, cx = W / 2, cy = H / 2 + 6, R = 220;
   const ang = STYLE_CATS.map((_, i) => -Math.PI / 2 + (i * 2 * Math.PI) / STYLE_CATS.length);
-  const dev = (r) => STYLE_CATS.map(([k]) => (num(r[k]) - 50) / 50);           // -1..1 per category
-  const mean = STYLE_CATS.map((_, i) => rows.reduce((a, r) => a + dev(r)[i], 0) / rows.length);
+  // Each dot sits on the spoke of the player's best category. Distance from the middle = how far
+  // that best category is above the player's own average (middle = even across the board). The dot
+  // tilts toward their second-best category. So a dot near a label always means "best at this".
+  const half = Math.PI / STYLE_CATS.length;                                    // half a sector
   const pts = rows.map((r) => {
-    const d = dev(r), own = d.reduce((a, b) => a + b, 0) / d.length;
-    let vx = 0, vy = 0;
-    d.forEach((v, i) => { vx += (v - own) * Math.cos(ang[i]); vy += (v - own) * Math.sin(ang[i]); });
-    let theta = Math.atan2(vy, vx);
-    if (Math.hypot(vx, vy) < 0.05) theta = ang[d.indexOf(Math.max(...d))];   // flat profile: use best category
-    const dist = Math.sqrt(d.reduce((a, v, i) => a + (v - mean[i]) ** 2, 0) / d.length);
-    // the category the dot points at (nearest direction), for the legend
-    const near = ang.map((a) => Math.abs(Math.atan2(Math.sin(theta - a), Math.cos(theta - a))));
-    const top = STYLE_CATS[near.indexOf(Math.min(...near))][1];
-    return {r, theta, dist, top};
+    const sc = STYLE_CATS.map(([k]) => num(r[k]));
+    const avg = sc.reduce((x, y) => x + y, 0) / sc.length;
+    const order = sc.map((v, i) => i).sort((i, j) => sc[j] - sc[i]);
+    const [t, u] = order;
+    const lead = sc[t] - avg;
+    let tilt = 0;
+    if (lead > 0) {
+      const d = Math.atan2(Math.sin(ang[u] - ang[t]), Math.cos(ang[u] - ang[t]));   // toward 2nd best
+      tilt = Math.sign(d) * Math.min(Math.abs(d), half * 0.8) * Math.max(0, Math.min(1, (sc[u] - avg) / lead));
+    }
+    const theta = ang[t] + tilt;
+    return {r, dist: Math.max(lead, 0), theta, top: STYLE_CATS[t][1],
+            vx: Math.cos(theta) * Math.max(lead, 0), vy: Math.sin(theta) * Math.max(lead, 0)};
   });
   const maxD = Math.max(...pts.map((p) => p.dist)) || 1;
-  pts.forEach((p) => { const rr = (p.dist / maxD) * R * 0.92; p.x = cx + rr * Math.cos(p.theta); p.y = cy + rr * Math.sin(p.theta); });
+  pts.forEach((p) => { const k = (R * 0.92) / maxD; p.x = cx + p.vx * k; p.y = cy + p.vy * k; });
   const typical = pts.reduce((a, b) => (b.dist < a.dist ? b : a)), extreme = pts.reduce((a, b) => (b.dist > a.dist ? b : a));
   let s = `<svg viewBox="0 0 ${W} ${H}" width="100%" style="min-width:520px;max-height:620px" role="img" aria-label="Playstyle map">`;
   [0.33, 0.66, 1].forEach((f) => { s += `<circle cx="${cx}" cy="${cy}" r="${R * f}" fill="none" stroke="var(--line)" ${f < 1 ? 'stroke-dasharray="2 4"' : ""}/>`; });
-  s += `<text x="${cx + 6}" y="${cy + 14}" fill="var(--faint)" font-size="10">typical</text>`;
+  s += `<text x="${cx + 6}" y="${cy + 14}" fill="var(--faint)" font-size="10">balanced</text>`;
   STYLE_CATS.forEach(([, label], i) => {
     const ex = cx + R * Math.cos(ang[i]), ey = cy + R * Math.sin(ang[i]);
     const lx = cx + (R + 26) * Math.cos(ang[i]), ly = cy + (R + 26) * Math.sin(ang[i]);
@@ -608,8 +613,8 @@ function playstyleMap(rows) {
     s += `<text x="${p.x + 9}" y="${ly}" dy="0.35em" fill="${hl ? "var(--fg)" : "var(--muted)"}" font-size="11" ${hl ? 'font-weight="600"' : ""} stroke="var(--panel)" stroke-width="3" paint-order="stroke">${esc(p.r.name.length > 14 ? p.r.name.slice(0, 13) + "…" : p.r.name)}</text></a>`;
   });
   s += `</svg>`;
-  s += `<div class="legend" style="margin-top:6px"><span><span class="sw" style="background:var(--good);border-radius:50%"></span>Most typical: <b>${pLink(typical.r.steamid, typical.r.name)}</b></span>` +
-       `<span><span class="sw" style="background:var(--r2);border-radius:50%"></span>Most extreme: <b>${pLink(extreme.r.steamid, extreme.r.name)}</b> (stands out in ${extreme.top})</span></div>`;
+  s += `<div class="legend" style="margin-top:6px"><span><span class="sw" style="background:var(--good);border-radius:50%"></span>Most balanced: <b>${pLink(typical.r.steamid, typical.r.name)}</b></span>` +
+       `<span><span class="sw" style="background:var(--r2);border-radius:50%"></span>Most specialized: <b>${pLink(extreme.r.steamid, extreme.r.name)}</b> (leans ${extreme.top})</span></div>`;
   return s;
 }
 
@@ -620,8 +625,17 @@ async function pageMatch(id) {
   const ta = m.team_a_name || "Team A", tb = m.team_b_name || "Team B";
   document.title = `${mapName(m.map)} ${m.score_a}:${m.score_b} · CS2 5v5`;
   const log = m.round_log || "";
-  const half = m.rounds >= 24 ? 12 : m.rounds >= 16 ? 8 : 12;   // MR12 (or MR8 short) halftime
-  const rounds = log ? [...log].map((c, i) => `<div class="rd ${c === "-" ? "x" : c.toUpperCase()} ${i === half ? "half" : ""}" title="Round ${i + 1}: ${c === "-" ? "?" : (c.toUpperCase() === "A" ? ta : tb) + (c === c.toLowerCase() && c !== "-" ? " (T side)" : " (CT side)")}">${i + 1}</div>`).join("") : "";
+  // Gaps go where the teams swapped sides (halftime, and each overtime half), read from which side
+  // won each round: "a" = A won on T, "A" = A won on CT, "b" = B won on T (so A was CT), "B" = A was T.
+  // Rounds with no side info fall back to the regulation layout (MR12, then MR3 overtime halves).
+  const sideA = [...log].map((c) => (c === "a" || c === "B" ? "T" : c === "A" || c === "b" ? "CT" : null));
+  const swap = (i) => {
+    if (i === 0) return false;
+    const prev = sideA.slice(0, i).reverse().find(Boolean);
+    if (sideA[i] && prev) return sideA[i] !== prev && (sideA[i - 1] == null || sideA[i - 1] === prev);
+    return i === 12 || (i > 24 && (i - 24) % 3 === 0);
+  };
+  const rounds = log ? [...log].map((c, i) => `<div class="rd ${c === "-" ? "x" : c.toUpperCase()} ${swap(i) ? "half" : ""}" title="Round ${i + 1}: ${c === "-" ? "?" : (c.toUpperCase() === "A" ? ta : tb) + (c === c.toLowerCase() && c !== "-" ? " (T side)" : " (CT side)")}">${i + 1}</div>`).join("") : "";
   const cols = [
     {k: "name", label: "Player", left: true, stick: true, fmt: (r) => `<span class="pname">${pLink(r.steamid, r.name)}</span>`, sort: (r) => r.name.toLowerCase()},
     {k: "elo", label: "Rank", left: true, fmt: (r) => `<span class="rk">${badge(r)}</span>`, sort: (r) => (r.placed ? 100000 : 0) + num(r.elo_sort)},

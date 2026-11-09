@@ -30,11 +30,14 @@ Bot-only endpoints — need "Authorization: Bearer $STATS_API_KEY":
   POST /api/discord-ratings {"discord_ids": [...]}  -> Elo for linked members (team balancing)
   POST /api/predict  {"team_a": [discord ids], "team_b": [...]}  -> win odds + Elo at stake
   GET/POST /api/kv/<key>  {"value": "..."}  small store for the bot (recap / season posts)
+  POST /api/matchzy-event   MatchZy's live events (matchzy_remote_log_url), header Authorization: Bearer <key>
+  GET  /api/events?after=N  those events for the bot (e.g. map_result -> move everyone back to the lobby)
   DELETE /api/matches/<id>
 """
 from __future__ import annotations
 
 import asyncio
+import collections
 import hmac
 import ipaddress
 import socket
@@ -177,6 +180,33 @@ class StatsService:
         self._elo = (None, None)
         self._elo_lock = threading.Lock()
         self._comm = (None, None)
+        self.events = collections.deque(maxlen=100)       # recent MatchZy events, newest last
+        self.event_seq = 0
+        self._ev_lock = threading.Lock()
+
+    KEEP_EVENTS = {"going_live", "map_result", "series_end", "series_start", "side_picked", "map_picked"}
+
+    def add_event(self, body: dict):
+        """A MatchZy remote-log event. Only a few small fields are kept."""
+        name = str(body.get("event", ""))
+        if name not in self.KEEP_EVENTS:
+            return None
+        ev = {"event": name, "matchid": body.get("matchid"), "map_number": body.get("map_number"),
+              "at": datetime.now().isoformat(timespec="seconds")}
+        for k in ("team1", "team2", "winner"):
+            v = body.get(k)
+            if isinstance(v, dict):
+                ev[k] = {x: v.get(x) for x in ("name", "score", "team", "side") if x in v}
+        with self._ev_lock:
+            self.event_seq += 1
+            ev["id"] = self.event_seq
+            self.events.append(ev)
+        log.info("MatchZy event: %s", name)
+        return ev
+
+    def events_after(self, after: int):
+        with self._ev_lock:
+            return {"events": [e for e in self.events if e["id"] > after], "last": self.event_seq}
 
     # ---- Elo: replayed from the match history, cached until matches change ----
     def elo_full(self):
@@ -428,8 +458,15 @@ class StatsService:
         return {"win_prob_a": pr["win_prob_a"], "win_prob_b": pr["win_prob_b"], "players": players}
 
     def rank_images(self):
-        """Custom badge images the server owner dropped in RANK_IMAGE_DIR (1.png ... 18.png)."""
+        """Rank badge images: the bundled set (web/ranks/1..18.png), replaced by any the server
+        owner dropped in RANK_IMAGE_DIR."""
         out = {}
+        bundled = os.path.join(WEB_DIR, "ranks")
+        if os.path.isdir(bundled):
+            for f in os.listdir(bundled):
+                stem, ext = os.path.splitext(f)
+                if stem.isdigit() and 1 <= int(stem) <= 18 and ext.lower() == ".png":
+                    out[int(stem)] = f"/ranks/{f}"
         if os.path.isdir(self.rank_dir):
             for f in os.listdir(self.rank_dir):
                 stem, ext = os.path.splitext(f)
@@ -494,9 +531,9 @@ class Handler(BaseHTTPRequestHandler):
         given = self.headers.get("Authorization", "").removeprefix("Bearer ").strip()
         return bool(key) and hmac.compare_digest(given, key)
 
-    def _body(self):
+    def _body(self, limit=10_000):
         n = int(self.headers.get("Content-Length") or 0)
-        if n > 10_000:
+        if n > limit:
             return None
         try:
             return json.loads(self.rfile.read(n) or b"{}")
@@ -569,7 +606,7 @@ class Handler(BaseHTTPRequestHandler):
                 data = svc.match(mid)
                 return self._json(data) if data else self._err(404, "no such match")
             # ---- bot-only ----
-            if route[:1] in (["announcements"], ["discord"], ["links"], ["kv"]) and not self._authed():
+            if route[:1] in (["announcements"], ["discord"], ["links"], ["kv"], ["events"]) and not self._authed():
                 return self._err(401, "missing or wrong STATS_API_KEY")
             if route == ["announcements"]:
                 links = svc.db.discord_links()
@@ -585,6 +622,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"players": svc.db.players_with_links()})
             if len(route) == 2 and route[0] == "kv":
                 return self._json({"key": route[1], "value": svc.db.kv_get(route[1])})
+            if route == ["events"]:
+                return self._json(svc.events_after(int(q.get("after", 0) or 0)))
             if len(route) == 2 and route[0] == "discord":
                 return self._json({"steamid": svc.db.steamid_for_discord(route[1])})
             return self._err(404, "not found")
@@ -625,6 +664,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"ok": True})
             if route == ["rescan"]:
                 return self._json({"ok": True, "new": svc.rescan()})
+            if route == ["matchzy-event"]:
+                b = self._body(limit=2_000_000)
+                if isinstance(b, dict):
+                    svc.add_event(b)
+                return self._json({"ok": True})
             if route == ["predict"]:
                 b = self._body() or {}
                 return self._json(svc.predict(list(b.get("team_a") or [])[:20], list(b.get("team_b") or [])[:20]))
@@ -664,6 +708,8 @@ class Handler(BaseHTTPRequestHandler):
         m = re.fullmatch(r"/ranks/(\d{1,2}\.(?:png|webp|svg|jpg))", path)
         if m:
             file = os.path.join(self.svc.rank_dir, m.group(1))
+            if not os.path.isfile(file):
+                file = os.path.join(WEB_DIR, "ranks", m.group(1))       # bundled badge
             if os.path.isfile(file):
                 with open(file, "rb") as f:
                     return self._send(200, f.read(), mimetypes.guess_type(file)[0] or "image/png",

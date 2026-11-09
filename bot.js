@@ -119,7 +119,20 @@ client.on("interactionCreate", async (interaction) => {
 
         const match = client.matches.get(matchId);
         if (!match)
-            return interaction.reply({ content: "Match no longer exists.", ephemeral: true });
+            return interaction.reply({ content: "This lobby is gone (the bot restarted). Run /startmatch again.", ephemeral: true }).catch(() => {});
+
+        // Any error in a lobby button is logged and reported, never allowed to take the bot down
+        try {
+            await handleMatchButton(interaction, action, match);
+        } catch (err) {
+            console.error(`[button ${action}]`, err);
+            await replyError(interaction, err);
+        }
+    }
+});
+
+async function handleMatchButton(interaction, action, match) {
+    {
 
         if (action === "join") {
             if (match.players.includes(interaction.user.id))
@@ -179,14 +192,14 @@ client.on("interactionCreate", async (interaction) => {
         }
 
         if (action.startsWith("map")) {
-            try {
-                await mapVote.handle(interaction, action, match);
-            } catch (err) {
-                console.error(err);
-                await replyError(interaction, err);
-            }
+            await mapVote.handle(interaction, action, match);
         }
     }
-});
+}
+
+// Last line of defense: log anything unexpected instead of crashing (a crash loses every open lobby)
+client.on("error", (err) => console.error("[discord]", err));
+process.on("unhandledRejection", (err) => console.error("[unhandled]", err));
+process.on("uncaughtException", (err) => console.error("[uncaught]", err));
 
 client.login(process.env.DISCORD_TOKEN);
